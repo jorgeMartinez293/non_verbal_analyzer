@@ -262,9 +262,9 @@ def draw_face_inset(
     x_min, x_max = int(min(xs)), int(max(xs))
     y_min, y_max = int(min(ys)), int(max(ys))
 
-    # Add padding (~30 % of face size on each side)
+    # Add padding: more vertical room (forehead + chin tend to get clipped)
     pad_x = max(10, int((x_max - x_min) * 0.35))
-    pad_y = max(10, int((y_max - y_min) * 0.35))
+    pad_y = max(10, int((y_max - y_min) * 0.60))
     x_min = max(0, x_min - pad_x)
     y_min = max(0, y_min - pad_y)
     x_max = min(w, x_max + pad_x)

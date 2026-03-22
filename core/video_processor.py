@@ -55,7 +55,9 @@ class VideoProcessor:
         frames_before    = config.get("clip", {}).get("frames_before", 10)
         self._buffer     = deque(maxlen=frames_before)
         self._models_dir = Path(__file__).parent.parent / "models"
-        self._pose_lm = self._face_lm = self._hand_lm = None
+        self._pose_lm = None  # set by _build_landmarkers()
+        self._face_lm = None  # set by _build_landmarkers()
+        self._hand_lm = None  # set by _build_landmarkers()
         self._last_face_lms = None   # cache for debug inset continuity
 
     # ------------------------------------------------------------------
@@ -76,12 +78,17 @@ class VideoProcessor:
                 output_segmentation_masks     = False,
             )
         )
+        # Face uses IMAGE mode: performs full detection on every frame so
+        # landmarks always reappear as soon as the face is visible again,
+        # with no dependency on the VIDEO-mode tracker that breaks after
+        # a dropout.  This only affects the debug inset display; pose
+        # and hands remain in VIDEO mode for gesture detection stability.
         self._face_lm = mp_vision.FaceLandmarker.create_from_options(
             mp_vision.FaceLandmarkerOptions(
                 base_options = BaseOptions(
                     model_asset_path=str(self._models_dir / "face_landmarker.task")
                 ),
-                running_mode                   = RunningMode.VIDEO,
+                running_mode                   = RunningMode.IMAGE,
                 num_faces                      = 1,
                 min_face_detection_confidence  = 0.6,
                 min_face_presence_confidence   = 0.6,
@@ -222,7 +229,7 @@ class VideoProcessor:
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
         pose_result = self._pose_lm.detect_for_video(mp_image, timestamp_ms)
-        face_result = self._face_lm.detect_for_video(mp_image, timestamp_ms)
+        face_result = self._face_lm.detect(mp_image)           # IMAGE mode
         hand_result = self._hand_lm.detect_for_video(mp_image, timestamp_ms)
 
         landmarks: dict = {}
