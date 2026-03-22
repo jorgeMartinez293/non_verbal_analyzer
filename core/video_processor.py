@@ -55,23 +55,19 @@ class VideoProcessor:
         self._buffer     = deque(maxlen=frames_before)
         self._models_dir = Path(__file__).parent.parent / "models"
         self._pose_lm = self._face_lm = self._hand_lm = None
+        self._last_face_lms = None   # cache for debug inset continuity
 
     # ------------------------------------------------------------------
     def _build_landmarkers(self):
         BaseOptions = mp_tasks.BaseOptions
         RunningMode = VisionTaskRunningMode
 
-        # IMAGE mode: full independent detection on every frame.
-        # Slower than VIDEO mode but never loses tracking after a missed
-        # frame — guarantees landmarks reappear as soon as the subject
-        # is visible again, which is the correct behaviour for pre-recorded
-        # video analysis where precision matters more than throughput.
         self._pose_lm = mp_vision.PoseLandmarker.create_from_options(
             mp_vision.PoseLandmarkerOptions(
                 base_options = BaseOptions(
                     model_asset_path=str(self._models_dir / "pose_landmarker_heavy.task")
                 ),
-                running_mode                  = RunningMode.IMAGE,
+                running_mode                  = RunningMode.VIDEO,
                 num_poses                     = 1,
                 min_pose_detection_confidence = 0.6,
                 min_pose_presence_confidence  = 0.6,
@@ -84,7 +80,7 @@ class VideoProcessor:
                 base_options = BaseOptions(
                     model_asset_path=str(self._models_dir / "face_landmarker.task")
                 ),
-                running_mode                   = RunningMode.IMAGE,
+                running_mode                   = RunningMode.VIDEO,
                 num_faces                      = 1,
                 min_face_detection_confidence  = 0.6,
                 min_face_presence_confidence   = 0.6,
@@ -98,7 +94,7 @@ class VideoProcessor:
                 base_options = BaseOptions(
                     model_asset_path=str(self._models_dir / "hand_landmarker.task")
                 ),
-                running_mode                  = RunningMode.IMAGE,
+                running_mode                  = RunningMode.VIDEO,
                 num_hands                     = 2,
                 min_hand_detection_confidence = 0.6,
                 min_hand_presence_confidence  = 0.6,
@@ -146,7 +142,8 @@ class VideoProcessor:
                 if not ret:
                     break
 
-                landmarks = self._run_inference(frame)
+                timestamp_ms = int(frame_idx * 1000 / fps)
+                landmarks    = self._run_inference(frame, timestamp_ms)
 
                 # ---- normal mode: feed post-trigger frames first -----
                 if not self.debug and self.clip_saver:
@@ -176,8 +173,18 @@ class VideoProcessor:
 
                 # ---- debug mode: annotate and write frame ------------
                 if self.debug:
-                    debug_overlay.draw(frame, landmarks, crossed_arms_cfg)
-                    debug_overlay.draw_face_inset(frame, landmarks)
+                    # Update face landmark cache whenever tracking is active
+                    if landmarks.get("face"):
+                        self._last_face_lms = landmarks["face"]
+
+                    # For the inset, inject cached face lms so dots never
+                    # disappear due to brief VIDEO-mode tracking dropouts
+                    display_landmarks = dict(landmarks)
+                    if "face" not in display_landmarks and self._last_face_lms is not None:
+                        display_landmarks["face"] = self._last_face_lms
+
+                    debug_overlay.draw(frame, display_landmarks, crossed_arms_cfg)
+                    debug_overlay.draw_face_inset(frame, display_landmarks)
                     debug_overlay.draw_gesture_state(
                         frame,
                         self.gesture_manager.get_states(),
@@ -208,13 +215,13 @@ class VideoProcessor:
         print(f"\n[VideoProcessor] Done. {frame_idx} frames processed.")
 
     # ------------------------------------------------------------------
-    def _run_inference(self, bgr_frame) -> dict:
+    def _run_inference(self, bgr_frame, timestamp_ms: int) -> dict:
         rgb      = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-        pose_result = self._pose_lm.detect(mp_image)
-        face_result = self._face_lm.detect(mp_image)
-        hand_result = self._hand_lm.detect(mp_image)
+        pose_result = self._pose_lm.detect_for_video(mp_image, timestamp_ms)
+        face_result = self._face_lm.detect_for_video(mp_image, timestamp_ms)
+        hand_result = self._hand_lm.detect_for_video(mp_image, timestamp_ms)
 
         landmarks: dict = {}
         if pose_result.pose_landmarks:

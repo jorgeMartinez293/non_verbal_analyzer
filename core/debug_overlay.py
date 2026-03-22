@@ -268,24 +268,29 @@ def draw_face_inset(frame: np.ndarray, landmarks: dict) -> np.ndarray:
     if x_max <= x_min or y_max <= y_min:
         return frame
 
-    # ---- crop and draw landmarks on the crop ------------------------
+    # ---- crop -------------------------------------------------------
     crop = frame[y_min:y_max, x_min:x_max].copy()
     ch, cw = crop.shape[:2]
-
-    if face_lms:
-        for lm in face_lms:
-            px = int(lm.x * w) - x_min
-            py = int(lm.y * h) - y_min
-            if 0 <= px < cw and 0 <= py < ch:
-                cv2.circle(crop, (px, py), 1, (0, 230, 0), -1)
+    if cw <= 0 or ch <= 0:
+        return frame
 
     # ---- scale inset to 1/3 of frame width, keep aspect ratio ------
     inset_w = max(1, w // 3)
-    inset_h = max(1, int(inset_w * ch / cw) if cw > 0 else inset_w)
-    inset_h = min(inset_h, h // 2)   # never taller than half the frame
-    if inset_w <= 0 or inset_h <= 0 or cw <= 0 or ch <= 0:
-        return frame
-    inset = cv2.resize(crop, (inset_w, inset_h), interpolation=cv2.INTER_LINEAR)
+    inset_h = max(1, int(inset_w * ch / cw))
+    inset_h = min(inset_h, h // 2)
+    inset   = cv2.resize(crop, (inset_w, inset_h), interpolation=cv2.INTER_LINEAR)
+
+    # ---- draw landmarks AFTER resize so dots stay 1 px -------------
+    # Drawing on the large crop before scaling turns 1-px dots into
+    # sub-pixel artefacts that vanish during interpolation.
+    if face_lms:
+        scale_x = inset_w / (x_max - x_min)
+        scale_y = inset_h / (y_max - y_min)
+        for lm in face_lms:
+            px = int((lm.x * w - x_min) * scale_x)
+            py = int((lm.y * h - y_min) * scale_y)
+            if 0 <= px < inset_w and 0 <= py < inset_h:
+                cv2.circle(inset, (px, py), 1, (0, 230, 0), -1)
 
     # ---- border -----------------------------------------------------
     cv2.rectangle(inset, (0, 0), (inset_w - 1, inset_h - 1), (200, 200, 200), 2)
