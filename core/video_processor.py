@@ -1,35 +1,53 @@
 """
-Video Processor
+Video Processor  (MediaPipe Tasks API — mediapipe >= 0.10)
 
-Drives the main analysis loop:
-  1. Opens the MP4 with OpenCV.
-  2. Runs every frame through MediaPipe Holistic (model_complexity=2 for
-     maximum accuracy).
-  3. Packages the resulting landmarks into a dict and passes them to the
-     GestureManager.
-  4. Maintains a rolling frame buffer (deque) of length `frames_before`
-     for pre-trigger clip assembly.
-  5. Coordinates with ClipSaver to collect post-trigger frames and write
-     the final clips.
+Runs three separate landmarkers in VIDEO mode:
+  • PoseLandmarker   (heavy model) — 33 pose landmarks + 3-D world landmarks
+  • FaceLandmarker                 — 478-point face mesh
+  • HandLandmarker                 — 21 landmarks per hand, up to 2 hands
 
-Frame processing order (per iteration)
----------------------------------------
-  a) Read frame from VideoCapture
-  b) Call clip_saver.add_post_frame(frame) → feeds any pending clips
-  c) Run MediaPipe inference → extract landmarks
-  d) Append frame to rolling buffer (so trigger frame is the last entry)
-  e) Ask GestureManager whether any gesture fired
+Landmarks are packaged into a plain dict and forwarded to GestureManager.
+
+Frame processing order
+----------------------
+  a) Read BGR frame from VideoCapture
+  b) clip_saver.add_post_frame(frame) — feeds any pending clips
+  c) Run all three landmarkers on the frame
+  d) Append frame to rolling pre-trigger buffer
+  e) Ask GestureManager if any gesture fired
   f) For each fired gesture → clip_saver.trigger(pre_frames=list(buffer))
+
+Model files
+-----------
+Expected in the models/ directory next to this package root:
+  models/pose_landmarker_heavy.task
+  models/face_landmarker.task
+  models/hand_landmarker.task
 """
+
+from __future__ import annotations
+
+from collections import deque
+from pathlib import Path
 
 import cv2
 import mediapipe as mp
-from collections import deque
-from pathlib import Path
+from mediapipe.tasks import python as mp_tasks
+from mediapipe.tasks.python import vision as mp_vision
+from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
+    VisionTaskRunningMode,
+)
 
 from core.gesture_manager import GestureManager
 from core.clip_saver import ClipSaver
 
+
+# ---------------------------------------------------------------------------
+# Tiny shim so Tasks-API NormalizedLandmark lists look identical to the old
+# mp.solutions style that gesture classes already expect.
+# (Tasks API already exposes .x .y .z .visibility on NormalizedLandmark,
+#  so this is only needed to normalise "no landmark" → None safely.)
+# ---------------------------------------------------------------------------
 
 class VideoProcessor:
 
@@ -46,9 +64,58 @@ class VideoProcessor:
         frames_before = config.get("clip", {}).get("frames_before", 10)
         self._buffer  = deque(maxlen=frames_before)
 
-        self._mp_holistic  = mp.solutions.holistic
-        self._mp_drawing   = mp.solutions.drawing_utils
-        self._mp_draw_styles = mp.solutions.drawing_styles
+        self._models_dir = Path(__file__).parent.parent / "models"
+        self._pose_lm    = None
+        self._face_lm    = None
+        self._hand_lm    = None
+
+    # ------------------------------------------------------------------
+    def _build_landmarkers(self, fps: float):
+        """Instantiate the three landmarkers in VIDEO running mode."""
+        BaseOptions  = mp_tasks.BaseOptions
+        RunningMode  = VisionTaskRunningMode
+
+        # ---- Pose (heavy = most accurate) ----------------------------
+        pose_opts = mp_vision.PoseLandmarkerOptions(
+            base_options     = BaseOptions(
+                model_asset_path = str(self._models_dir / "pose_landmarker_heavy.task")
+            ),
+            running_mode         = RunningMode.VIDEO,
+            num_poses            = 1,
+            min_pose_detection_confidence  = 0.6,
+            min_pose_presence_confidence   = 0.6,
+            min_tracking_confidence        = 0.6,
+            output_segmentation_masks      = False,
+        )
+        self._pose_lm = mp_vision.PoseLandmarker.create_from_options(pose_opts)
+
+        # ---- Face ----------------------------------------------------
+        face_opts = mp_vision.FaceLandmarkerOptions(
+            base_options = BaseOptions(
+                model_asset_path = str(self._models_dir / "face_landmarker.task")
+            ),
+            running_mode                   = RunningMode.VIDEO,
+            num_faces                      = 1,
+            min_face_detection_confidence  = 0.6,
+            min_face_presence_confidence   = 0.6,
+            min_tracking_confidence        = 0.6,
+            output_face_blendshapes        = False,
+            output_facial_transformation_matrixes = False,
+        )
+        self._face_lm = mp_vision.FaceLandmarker.create_from_options(face_opts)
+
+        # ---- Hands ---------------------------------------------------
+        hand_opts = mp_vision.HandLandmarkerOptions(
+            base_options = BaseOptions(
+                model_asset_path = str(self._models_dir / "hand_landmarker.task")
+            ),
+            running_mode                    = RunningMode.VIDEO,
+            num_hands                       = 2,
+            min_hand_detection_confidence   = 0.6,
+            min_hand_presence_confidence    = 0.6,
+            min_tracking_confidence         = 0.6,
+        )
+        self._hand_lm = mp_vision.HandLandmarker.create_from_options(hand_opts)
 
     # ------------------------------------------------------------------
     def process(self, video_path: str) -> None:
@@ -65,44 +132,32 @@ class VideoProcessor:
         print(f"\n[VideoProcessor] File   : {video_path}")
         print(f"[VideoProcessor] Size   : {width}x{height}  |  FPS: {fps:.2f}  |  Frames: {total_frames}\n")
 
-        holistic_cfg = dict(
-            model_complexity          = 2,      # highest accuracy
-            smooth_landmarks          = True,
-            enable_segmentation       = False,
-            smooth_segmentation       = False,
-            refine_face_landmarks     = True,   # 478-point face mesh
-            min_detection_confidence  = 0.6,
-            min_tracking_confidence   = 0.6,
-        )
+        self._build_landmarkers(fps)
 
-        with self._mp_holistic.Holistic(**holistic_cfg) as holistic:
+        try:
             frame_idx = 0
-
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
 
-                # (b) feed post-trigger frames to any pending clips FIRST
+                # (b) feed post-trigger frames to pending clips FIRST
                 self.clip_saver.add_post_frame(frame)
 
-                # (c) MediaPipe inference
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                rgb.flags.writeable = False
-                results = holistic.process(rgb)
-                rgb.flags.writeable = True
+                # (c) run inference
+                timestamp_ms = int(frame_idx * 1000 / fps)
+                landmarks    = self._run_inference(frame, timestamp_ms)
 
-                landmarks = self._extract_landmarks(results)
-
-                # (d) append to rolling buffer so trigger frame is last
+                # (d) append to rolling buffer (trigger frame ends up last)
                 self._buffer.append(frame.copy())
 
-                # (e) gesture detection
+                # (e-f) gesture detection + clip trigger
                 triggered = self.gesture_manager.process_frame(landmarks)
-
-                # (f) trigger clip collection
                 for gesture_name in triggered:
-                    print(f"[VideoProcessor] ✓ Gesture '{gesture_name}' confirmed at frame {frame_idx}")
+                    print(
+                        f"[VideoProcessor] ✓ Gesture '{gesture_name}' "
+                        f"confirmed at frame {frame_idx}"
+                    )
                     self.clip_saver.trigger(
                         gesture_name      = gesture_name,
                         pre_frames        = list(self._buffer),
@@ -116,37 +171,57 @@ class VideoProcessor:
                 frame_idx += 1
                 if frame_idx % 100 == 0:
                     pct = frame_idx / total_frames * 100 if total_frames else 0
-                    print(f"[VideoProcessor] {frame_idx}/{total_frames} frames processed ({pct:.1f}%)")
+                    print(
+                        f"[VideoProcessor] {frame_idx}/{total_frames} "
+                        f"frames processed ({pct:.1f}%)"
+                    )
 
-        cap.release()
+        finally:
+            cap.release()
+            self._pose_lm.close()
+            self._face_lm.close()
+            self._hand_lm.close()
+
         self.clip_saver.flush()
         print(f"\n[VideoProcessor] Done. {frame_idx} frames processed.")
 
     # ------------------------------------------------------------------
-    @staticmethod
-    def _extract_landmarks(results) -> dict:
+    def _run_inference(self, bgr_frame, timestamp_ms: int) -> dict:
         """
-        Converts MediaPipe Holistic results into a plain dict so gesture
-        classes stay decoupled from the MediaPipe API.
-
-        Keys present only when the corresponding model produced output:
-            'pose'       → list of 33  NormalizedLandmark  (x, y, z, visibility)
-            'face'       → list of 478 NormalizedLandmark  (x, y, z)
-            'left_hand'  → list of 21  NormalizedLandmark  (x, y, z)
-            'right_hand' → list of 21  NormalizedLandmark  (x, y, z)
+        Run all three landmarkers and return a unified landmarks dict:
+            'pose'       → list[NormalizedLandmark] (33)   or None
+            'face'       → list[NormalizedLandmark] (478)  or None
+            'left_hand'  → list[NormalizedLandmark] (21)   or None
+            'right_hand' → list[NormalizedLandmark] (21)   or None
         """
-        landmarks = {}
+        rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
-        if results.pose_landmarks:
-            landmarks["pose"] = results.pose_landmarks.landmark
+        pose_result = self._pose_lm.detect_for_video(mp_image, timestamp_ms)
+        face_result = self._face_lm.detect_for_video(mp_image, timestamp_ms)
+        hand_result = self._hand_lm.detect_for_video(mp_image, timestamp_ms)
 
-        if results.face_landmarks:
-            landmarks["face"] = results.face_landmarks.landmark
+        landmarks: dict = {}
 
-        if results.left_hand_landmarks:
-            landmarks["left_hand"] = results.left_hand_landmarks.landmark
+        # Pose — take first detected person
+        if pose_result.pose_landmarks:
+            landmarks["pose"] = pose_result.pose_landmarks[0]
 
-        if results.right_hand_landmarks:
-            landmarks["right_hand"] = results.right_hand_landmarks.landmark
+        # Face — take first detected face
+        if face_result.face_landmarks:
+            landmarks["face"] = face_result.face_landmarks[0]
+
+        # Hands — split by handedness label ("Left" / "Right")
+        # Note: MediaPipe reports handedness from the *camera's* perspective,
+        # which is mirrored vs the subject; for pre-recorded video the raw
+        # label is used as-is.  Gesture files that care about which hand is
+        # which should inspect the 'handedness' key if needed.
+        if hand_result.hand_landmarks:
+            for hand_lms, handedness_list in zip(
+                hand_result.hand_landmarks, hand_result.handedness
+            ):
+                label = handedness_list[0].category_name  # "Left" or "Right"
+                key   = "left_hand" if label == "Left" else "right_hand"
+                landmarks[key] = hand_lms
 
         return landmarks

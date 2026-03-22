@@ -9,6 +9,6 @@
     "wrist_height_max_ratio": 1.1,
     "min_landmark_visibility": 0.5,
     "confirmation_frames": 12,
-    "cooldown_frames": 90
+    "cooldown_frames": 300
   }
 }

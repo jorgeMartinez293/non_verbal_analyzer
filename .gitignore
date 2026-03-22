@@ -17,6 +17,10 @@ env/
 # Output clips (large video files — commit only code, not results)
 output/*/
 
+# Downloaded model bundles (large binaries — download via download_models.py)
+models/*.task
+models/*.tflite
+
 # Jupyter
 .ipynb_checkpoints/
 
