@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import mediapipe as mp
@@ -174,7 +175,13 @@ class VideoProcessor:
                 # ---- debug mode: annotate and write frame ------------
                 if self.debug:
                     if landmarks.get("face"):
-                        self._last_face_lms = landmarks["face"]
+                        # Copy coordinates into plain Python objects so they
+                        # remain valid after MediaPipe recycles its internal
+                        # C++ buffers on the next inference call.
+                        self._last_face_lms = [
+                            SimpleNamespace(x=lm.x, y=lm.y, z=lm.z)
+                            for lm in landmarks["face"]
+                        ]
 
                     debug_overlay.draw(frame, landmarks, crossed_arms_cfg)
                     debug_overlay.draw_face_inset(
