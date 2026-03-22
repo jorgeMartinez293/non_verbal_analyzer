@@ -1,7 +1,7 @@
 """
 Debug Overlay
 
-Two public functions:
+Public functions:
 
   draw(frame, landmarks, thresholds)
       Draws the 8 pose landmarks used by CrossedArms on the frame.
@@ -9,6 +9,10 @@ Two public functions:
   draw_gesture_state(frame, gesture_states, alert_states, thresholds)
       Draws the gesture status panel: confirmation progress bar,
       cooldown countdown, and a flashing DETECTED banner.
+
+  draw_face_inset(frame, landmarks)
+      Renders a zoomed face crop with all 478 face landmarks in the
+      top-right corner of the frame.
 """
 
 from __future__ import annotations
@@ -215,6 +219,84 @@ def draw_gesture_state(
                      f"({ratio*100:.0f}% / need {required*100:.0f}%)")
             cv2.putText(frame, label, (pad, y_cursor + bar_h - 4),
                         font, font_scale, (200, 230, 230), thickness, cv2.LINE_AA)
+
+    return frame
+
+
+# -----------------------------------------------------------------------
+def draw_face_inset(frame: np.ndarray, landmarks: dict) -> np.ndarray:
+    """
+    Crop the face region from *frame*, draw all detected face landmarks
+    on the crop, and embed it as a picture-in-picture in the top-right
+    corner.
+
+    Bounding box is derived from the 478 face mesh landmarks when
+    available, falling back to the 11 head pose landmarks (nose, eyes,
+    ears, mouth corners) if the face landmarker produced no output.
+    """
+    h, w = frame.shape[:2]
+
+    face_lms = landmarks.get("face")
+    pose_lms = landmarks.get("pose")
+
+    if face_lms is None and pose_lms is None:
+        return frame
+
+    # ---- compute face bounding box in pixel coords ------------------
+    if face_lms:
+        xs = [lm.x * w for lm in face_lms]
+        ys = [lm.y * h for lm in face_lms]
+    else:
+        # Head landmarks: nose(0) … mouth_right(10)
+        head = [pose_lms[i] for i in range(11) if pose_lms[i].visibility > 0.3]
+        if not head:
+            return frame
+        xs = [lm.x * w for lm in head]
+        ys = [lm.y * h for lm in head]
+
+    x_min, x_max = int(min(xs)), int(max(xs))
+    y_min, y_max = int(min(ys)), int(max(ys))
+
+    # Add padding (~30 % of face size on each side)
+    pad_x = max(10, int((x_max - x_min) * 0.35))
+    pad_y = max(10, int((y_max - y_min) * 0.35))
+    x_min = max(0, x_min - pad_x)
+    y_min = max(0, y_min - pad_y)
+    x_max = min(w, x_max + pad_x)
+    y_max = min(h, y_max + pad_y)
+
+    if x_max <= x_min or y_max <= y_min:
+        return frame
+
+    # ---- crop and draw landmarks on the crop ------------------------
+    crop = frame[y_min:y_max, x_min:x_max].copy()
+    ch, cw = crop.shape[:2]
+
+    if face_lms:
+        for lm in face_lms:
+            px = int(lm.x * w) - x_min
+            py = int(lm.y * h) - y_min
+            if 0 <= px < cw and 0 <= py < ch:
+                cv2.circle(crop, (px, py), 1, (0, 230, 0), -1)
+
+    # ---- scale inset to 1/3 of frame width, keep aspect ratio ------
+    inset_w = max(1, w // 3)
+    inset_h = max(1, int(inset_w * ch / cw) if cw > 0 else inset_w)
+    inset_h = min(inset_h, h // 2)   # never taller than half the frame
+    if inset_w <= 0 or inset_h <= 0 or cw <= 0 or ch <= 0:
+        return frame
+    inset = cv2.resize(crop, (inset_w, inset_h), interpolation=cv2.INTER_LINEAR)
+
+    # ---- border -----------------------------------------------------
+    cv2.rectangle(inset, (0, 0), (inset_w - 1, inset_h - 1), (200, 200, 200), 2)
+
+    # ---- place in top-right corner ----------------------------------
+    margin = 10
+    x_off  = w - inset_w - margin
+    y_off  = margin
+
+    if x_off >= 0 and y_off + inset_h <= h:
+        frame[y_off: y_off + inset_h, x_off: x_off + inset_w] = inset
 
     return frame
 

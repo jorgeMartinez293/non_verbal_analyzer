@@ -173,6 +173,7 @@ class VideoProcessor:
                 # ---- debug mode: annotate and write frame ------------
                 if self.debug:
                     debug_overlay.draw(frame, landmarks, crossed_arms_cfg)
+                    debug_overlay.draw_face_inset(frame, landmarks)
                     debug_overlay.draw_gesture_state(
                         frame,
                         self.gesture_manager.get_states(),
