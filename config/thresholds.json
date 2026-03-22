@@ -4,11 +4,11 @@
     "frames_after": 10
   },
   "crossed_arms": {
-    "wrist_cross_margin": 0.05,
+    "min_landmark_visibility": 0.5,
+    "min_shoulder_dist": 0.10,
+    "wrist_cross_ratio": 0.50,
     "wrist_height_min_ratio": 0.0,
     "wrist_height_max_ratio": 1.1,
-    "min_landmark_visibility": 0.5,
-    "min_face_visibility": 0.5,
     "confirmation_window": 20,
     "confirmation_ratio": 0.70,
     "cooldown_frames": 300

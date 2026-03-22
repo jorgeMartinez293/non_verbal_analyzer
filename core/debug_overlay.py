@@ -79,40 +79,56 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
         cv2.line(frame, _px(lm[f"{side}_ELBOW"],    w, h),
                         _px(lm[f"{side}_WRIST"],    w, h), _COL_BONE, 2)
 
-    # ---- wrist-to-wrist crossing line --------------------------------
-    margin      = thresholds.get("wrist_cross_margin", 0.05)
-    cross_value = lm["R_WRIST"].x - lm["L_WRIST"].x
-    cross_met   = cross_value >= margin
-    cv2.line(frame, _px(lm["L_WRIST"], w, h), _px(lm["R_WRIST"], w, h),
-             _COL_MET if cross_met else _COL_FAIL, 3)
+    # ---- crossing ratios (new scale-invariant metric) ----------------
+    shoulder_dist = lm["L_SHOULDER"].x - lm["R_SHOULDER"].x  # >0 facing cam
+    min_sd        = thresholds.get("min_shoulder_dist", 0.10)
+    cross_thresh  = thresholds.get("wrist_cross_ratio", 0.50)
 
-    # ---- wrist dots (coloured by height check) -----------------------
-    for key in ("L_WRIST", "R_WRIST"):
-        wrist = lm[key]
-        ratio = (wrist.y - shoulder_y) / torso_h if torso_h > 0 else 0
-        col   = _COL_MET if h_min <= ratio <= h_max else _COL_FAIL
-        cv2.circle(frame, _px(wrist, w, h), 8, col,           -1)
-        cv2.circle(frame, _px(wrist, w, h), 8, (255,255,255),  1)
+    if shoulder_dist > 0:
+        right_ratio = (lm["R_WRIST"].x - lm["R_SHOULDER"].x) / shoulder_dist
+        left_ratio  = (lm["L_SHOULDER"].x - lm["L_WRIST"].x) / shoulder_dist
+    else:
+        right_ratio = left_ratio = 0.0
+
+    facing_ok   = shoulder_dist >= min_sd
+    right_ok    = right_ratio >= cross_thresh
+    left_ok     = left_ratio  >= cross_thresh
+
+    # Wrist connector: green only when both ratios meet the threshold
+    cv2.line(frame, _px(lm["L_WRIST"], w, h), _px(lm["R_WRIST"], w, h),
+             _COL_MET if (right_ok and left_ok) else _COL_FAIL, 3)
+
+    # ---- wrist dots (coloured by their own crossing ratio) ----------
+    for key, ratio_val, ratio_ok in [
+        ("R_WRIST", right_ratio, right_ok),
+        ("L_WRIST", left_ratio,  left_ok),
+    ]:
+        col = _COL_MET if ratio_ok else _COL_FAIL
+        cv2.circle(frame, _px(lm[key], w, h), 8, col,            -1)
+        cv2.circle(frame, _px(lm[key], w, h), 8, (255, 255, 255), 1)
 
     # ---- remaining landmark dots ------------------------------------
     for name, col in [
         ("L_SHOULDER", _COL_SHOULDER), ("R_SHOULDER", _COL_SHOULDER),
-        ("L_ELBOW",    _COL_ELBOW),    ("R_ELBOW",    _COL_ELBOW),
         ("L_HIP",      _COL_HIP),      ("R_HIP",      _COL_HIP),
     ]:
-        cv2.circle(frame, _px(lm[name], w, h), 6, col,          -1)
-        cv2.circle(frame, _px(lm[name], w, h), 6, (255,255,255), 1)
+        cv2.circle(frame, _px(lm[name], w, h), 6, col,           -1)
+        cv2.circle(frame, _px(lm[name], w, h), 6, (255, 255, 255), 1)
 
     # ---- HUD values --------------------------------------------------
-    lw_ratio = (lm["L_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
-    rw_ratio = (lm["R_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
+    lw_h = (lm["L_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
+    rw_h = (lm["R_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
     hud_lines = [
-        (f"R-L wrist: {cross_value:+.3f}  (need >= {margin:.3f})",
-         (0,220,0) if cross_met else (0,80,220)),
-        (f"L wrist height: {lw_ratio:.2f}  [{h_min:.1f}-{h_max:.1f}]",
-         (0,220,0) if h_min <= lw_ratio <= h_max else (0,80,220)),
-        (f"R wrist height: {rw_ratio:.2f}  [{h_min:.1f}-{h_max:.1f}]",
-         (0,220,0) if h_min <= rw_ratio <= h_max else (0,80,220)),
+        (f"shoulder_dist: {shoulder_dist:.3f}  (min {min_sd:.2f})",
+         (0, 220, 0) if facing_ok else (0, 80, 220)),
+        (f"R wrist ratio: {right_ratio:.2f}  (need >= {cross_thresh:.2f})",
+         (0, 220, 0) if right_ok else (0, 80, 220)),
+        (f"L wrist ratio: {left_ratio:.2f}  (need >= {cross_thresh:.2f})",
+         (0, 220, 0) if left_ok else (0, 80, 220)),
+        (f"L wrist height: {lw_h:.2f}  [{h_min:.1f}-{h_max:.1f}]",
+         (0, 220, 0) if h_min <= lw_h <= h_max else (0, 80, 220)),
+        (f"R wrist height: {rw_h:.2f}  [{h_min:.1f}-{h_max:.1f}]",
+         (0, 220, 0) if h_min <= rw_h <= h_max else (0, 80, 220)),
     ]
     _put_hud(frame, hud_lines, w, h, y_offset=0)
     return frame
