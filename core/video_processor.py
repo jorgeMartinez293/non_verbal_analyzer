@@ -173,18 +173,13 @@ class VideoProcessor:
 
                 # ---- debug mode: annotate and write frame ------------
                 if self.debug:
-                    # Update face landmark cache whenever tracking is active
                     if landmarks.get("face"):
                         self._last_face_lms = landmarks["face"]
 
-                    # For the inset, inject cached face lms so dots never
-                    # disappear due to brief VIDEO-mode tracking dropouts
-                    display_landmarks = dict(landmarks)
-                    if "face" not in display_landmarks and self._last_face_lms is not None:
-                        display_landmarks["face"] = self._last_face_lms
-
-                    debug_overlay.draw(frame, display_landmarks, crossed_arms_cfg)
-                    debug_overlay.draw_face_inset(frame, display_landmarks)
+                    debug_overlay.draw(frame, landmarks, crossed_arms_cfg)
+                    debug_overlay.draw_face_inset(
+                        frame, landmarks, cached_face_lms=self._last_face_lms
+                    )
                     debug_overlay.draw_gesture_state(
                         frame,
                         self.gesture_manager.get_states(),

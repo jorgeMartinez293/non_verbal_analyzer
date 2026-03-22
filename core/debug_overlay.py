@@ -224,35 +224,40 @@ def draw_gesture_state(
 
 
 # -----------------------------------------------------------------------
-def draw_face_inset(frame: np.ndarray, landmarks: dict) -> np.ndarray:
+def draw_face_inset(
+    frame: np.ndarray,
+    landmarks: dict,
+    cached_face_lms=None,
+) -> np.ndarray:
     """
     Crop the face region from *frame*, draw all detected face landmarks
     on the crop, and embed it as a picture-in-picture in the top-right
     corner.
 
-    Bounding box is derived from the 478 face mesh landmarks when
-    available, falling back to the 11 head pose landmarks (nose, eyes,
-    ears, mouth corners) if the face landmarker produced no output.
+    Bounding box is ALWAYS derived from pose head landmarks (indices 0–10)
+    so the window keeps following the face even when the face landmarker
+    loses tracking.
+
+    Dots are drawn from the current face landmarks when available, or from
+    cached_face_lms when the face landmarker has dropped out temporarily.
     """
     h, w = frame.shape[:2]
 
-    face_lms = landmarks.get("face")
     pose_lms = landmarks.get("pose")
+    face_lms = landmarks.get("face") or cached_face_lms
 
-    if face_lms is None and pose_lms is None:
+    if pose_lms is None:
         return frame
 
-    # ---- compute face bounding box in pixel coords ------------------
-    if face_lms:
-        xs = [lm.x * w for lm in face_lms]
-        ys = [lm.y * h for lm in face_lms]
-    else:
-        # Head landmarks: nose(0) … mouth_right(10)
-        head = [pose_lms[i] for i in range(11) if pose_lms[i].visibility > 0.3]
-        if not head:
-            return frame
-        xs = [lm.x * w for lm in head]
-        ys = [lm.y * h for lm in head]
+    # ---- bounding box always from current pose head landmarks -------
+    # Pose tracking in VIDEO mode is much more stable than face tracking.
+    # Using it for the bbox guarantees the window keeps moving with the
+    # subject regardless of face landmarker state.
+    head = [pose_lms[i] for i in range(11) if pose_lms[i].visibility > 0.3]
+    if not head:
+        return frame
+    xs = [lm.x * w for lm in head]
+    ys = [lm.y * h for lm in head]
 
     x_min, x_max = int(min(xs)), int(max(xs))
     y_min, y_max = int(min(ys)), int(max(ys))
