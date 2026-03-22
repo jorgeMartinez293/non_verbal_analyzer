@@ -1,17 +1,25 @@
 """
-Non-Verbal Language Analyzer — debug-viz branch
-================================================
-Processes a pre-recorded MP4 and outputs a fully annotated copy with:
-  • Pose landmarks (wrists, elbows, shoulders, hips)
-  • Wrist-to-wrist crossing line (green = condition met, red = not)
-  • Torso height band
-  • Live threshold values (top-left HUD)
-  • Gesture confirmation progress bar (bottom of frame)
-  • DETECTED banner when a gesture fires
+Non-Verbal Language Analyzer
+=============================
+Analyzes a pre-recorded MP4 video for non-verbal gestures using
+MediaPipe (pose + face + hands, heavy model).
+
+Default behaviour
+-----------------
+    Detects gestures and saves a ~20-frame clip (configurable) for each
+    confirmed detection to:
+        <output_dir>/<video_stem>/<gesture>_frame<N>.mp4
+
+Debug mode  (--debug)
+---------------------
+    Draws pose landmarks, live threshold values, and gesture state on
+    every frame and writes a single annotated video to:
+        <output_dir>/<video_stem>_annotated.mp4
+    Useful for tuning thresholds and verifying detection logic.
 
 Usage
 -----
-    python main.py <video_path> [--output-dir OUTPUT] [--config CONFIG]
+    python main.py <video_path> [--output-dir OUTPUT] [--config CONFIG] [--debug]
 """
 
 import argparse
@@ -22,13 +30,16 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Output a fully annotated debug video with gesture detection."
+        description="Analyze non-verbal language in a pre-recorded MP4 video."
     )
-    parser.add_argument("video_path", help="Path to the input .mp4 file.")
+    parser.add_argument("video_path",
+                        help="Path to the input .mp4 file.")
     parser.add_argument("--output-dir", default="output",
-                        help="Directory for the annotated output video (default: output/).")
+                        help="Output directory (default: output/).")
     parser.add_argument("--config", default="config/thresholds.json",
                         help="Thresholds config file (default: config/thresholds.json).")
+    parser.add_argument("--debug", action="store_true",
+                        help="Output a full annotated video instead of gesture clips.")
     return parser.parse_args()
 
 
@@ -49,7 +60,30 @@ def main() -> None:
     from core.video_processor import VideoProcessor
 
     gesture_manager = GestureManager(config)
-    processor       = VideoProcessor(gesture_manager, config, output_dir=args.output_dir)
+
+    if args.debug:
+        processor = VideoProcessor(
+            gesture_manager = gesture_manager,
+            config          = config,
+            output_dir      = args.output_dir,
+            debug           = True,
+        )
+    else:
+        from core.clip_saver import ClipSaver
+        clip_cfg   = config.get("clip", {})
+        clip_saver = ClipSaver(
+            frames_before = clip_cfg.get("frames_before", 10),
+            frames_after  = clip_cfg.get("frames_after",  10),
+            output_dir    = args.output_dir,
+        )
+        processor = VideoProcessor(
+            gesture_manager = gesture_manager,
+            config          = config,
+            clip_saver      = clip_saver,
+            output_dir      = args.output_dir,
+            debug           = False,
+        )
+
     processor.process(args.video_path)
 
 
