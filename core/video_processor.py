@@ -61,12 +61,17 @@ class VideoProcessor:
         BaseOptions = mp_tasks.BaseOptions
         RunningMode = VisionTaskRunningMode
 
+        # IMAGE mode: full independent detection on every frame.
+        # Slower than VIDEO mode but never loses tracking after a missed
+        # frame — guarantees landmarks reappear as soon as the subject
+        # is visible again, which is the correct behaviour for pre-recorded
+        # video analysis where precision matters more than throughput.
         self._pose_lm = mp_vision.PoseLandmarker.create_from_options(
             mp_vision.PoseLandmarkerOptions(
                 base_options = BaseOptions(
                     model_asset_path=str(self._models_dir / "pose_landmarker_heavy.task")
                 ),
-                running_mode                  = RunningMode.VIDEO,
+                running_mode                  = RunningMode.IMAGE,
                 num_poses                     = 1,
                 min_pose_detection_confidence = 0.6,
                 min_pose_presence_confidence  = 0.6,
@@ -79,7 +84,7 @@ class VideoProcessor:
                 base_options = BaseOptions(
                     model_asset_path=str(self._models_dir / "face_landmarker.task")
                 ),
-                running_mode                   = RunningMode.VIDEO,
+                running_mode                   = RunningMode.IMAGE,
                 num_faces                      = 1,
                 min_face_detection_confidence  = 0.6,
                 min_face_presence_confidence   = 0.6,
@@ -93,7 +98,7 @@ class VideoProcessor:
                 base_options = BaseOptions(
                     model_asset_path=str(self._models_dir / "hand_landmarker.task")
                 ),
-                running_mode                  = RunningMode.VIDEO,
+                running_mode                  = RunningMode.IMAGE,
                 num_hands                     = 2,
                 min_hand_detection_confidence = 0.6,
                 min_hand_presence_confidence  = 0.6,
@@ -141,8 +146,7 @@ class VideoProcessor:
                 if not ret:
                     break
 
-                timestamp_ms = int(frame_idx * 1000 / fps)
-                landmarks    = self._run_inference(frame, timestamp_ms)
+                landmarks = self._run_inference(frame)
 
                 # ---- normal mode: feed post-trigger frames first -----
                 if not self.debug and self.clip_saver:
@@ -204,13 +208,13 @@ class VideoProcessor:
         print(f"\n[VideoProcessor] Done. {frame_idx} frames processed.")
 
     # ------------------------------------------------------------------
-    def _run_inference(self, bgr_frame, timestamp_ms: int) -> dict:
+    def _run_inference(self, bgr_frame) -> dict:
         rgb      = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-        pose_result = self._pose_lm.detect_for_video(mp_image, timestamp_ms)
-        face_result = self._face_lm.detect_for_video(mp_image, timestamp_ms)
-        hand_result = self._hand_lm.detect_for_video(mp_image, timestamp_ms)
+        pose_result = self._pose_lm.detect(mp_image)
+        face_result = self._face_lm.detect(mp_image)
+        hand_result = self._hand_lm.detect(mp_image)
 
         landmarks: dict = {}
         if pose_result.pose_landmarks:
