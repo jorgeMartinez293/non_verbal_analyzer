@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
         default="config/thresholds.json",
         help="Path to the thresholds configuration file (default: config/thresholds.json).",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Draw pose landmarks and live threshold values on saved clips.",
+    )
     return parser.parse_args()
 
 
@@ -71,7 +76,7 @@ def main() -> None:
     )
 
     gesture_manager = GestureManager(config)
-    processor       = VideoProcessor(gesture_manager, clip_saver, config)
+    processor       = VideoProcessor(gesture_manager, clip_saver, config, debug=args.debug)
 
     processor.process(args.video_path)
 

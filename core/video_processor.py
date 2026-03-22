@@ -40,14 +40,8 @@ from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
 
 from core.gesture_manager import GestureManager
 from core.clip_saver import ClipSaver
+from core import debug_overlay
 
-
-# ---------------------------------------------------------------------------
-# Tiny shim so Tasks-API NormalizedLandmark lists look identical to the old
-# mp.solutions style that gesture classes already expect.
-# (Tasks API already exposes .x .y .z .visibility on NormalizedLandmark,
-#  so this is only needed to normalise "no landmark" → None safely.)
-# ---------------------------------------------------------------------------
 
 class VideoProcessor:
 
@@ -56,10 +50,12 @@ class VideoProcessor:
         gesture_manager: GestureManager,
         clip_saver: ClipSaver,
         config: dict,
+        debug: bool = False,
     ):
         self.gesture_manager = gesture_manager
         self.clip_saver      = clip_saver
         self.config          = config
+        self.debug           = debug
 
         frames_before = config.get("clip", {}).get("frames_before", 10)
         self._buffer  = deque(maxlen=frames_before)
@@ -134,6 +130,8 @@ class VideoProcessor:
 
         self._build_landmarkers(fps)
 
+        crossed_arms_thresholds = self.config.get("crossed_arms", {})
+
         try:
             frame_idx = 0
             while True:
@@ -141,17 +139,23 @@ class VideoProcessor:
                 if not ret:
                     break
 
-                # (b) feed post-trigger frames to pending clips FIRST
-                self.clip_saver.add_post_frame(frame)
-
-                # (c) run inference
+                # (b) run inference first so we can annotate before buffering
                 timestamp_ms = int(frame_idx * 1000 / fps)
                 landmarks    = self._run_inference(frame, timestamp_ms)
 
-                # (d) append to rolling buffer (trigger frame ends up last)
-                self._buffer.append(frame.copy())
+                # (c) annotate frame if debug mode is on
+                display_frame = (
+                    debug_overlay.draw(frame, landmarks, crossed_arms_thresholds)
+                    if self.debug else frame
+                )
 
-                # (e-f) gesture detection + clip trigger
+                # (d) feed post-trigger frames to pending clips
+                self.clip_saver.add_post_frame(display_frame)
+
+                # (e) append to rolling buffer (trigger frame ends up last)
+                self._buffer.append(display_frame.copy())
+
+                # (f) gesture detection + clip trigger
                 triggered = self.gesture_manager.process_frame(landmarks)
                 for gesture_name in triggered:
                     print(
