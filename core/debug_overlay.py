@@ -142,12 +142,10 @@ def draw_gesture_state(
     y_cursor = h  # build upwards from the bottom
 
     for gesture_name, state in gesture_states.items():
-        cfg           = thresholds.get(gesture_name, {})
-        confirm_total = cfg.get("confirmation_frames", 12)
-        cooldown_tot  = cfg.get("cooldown_frames", 300)
-        active        = state["active_frames"]
-        cooldown_rem  = state["cooldown_remaining"]
-        alert_rem     = alert_states.get(gesture_name, 0)
+        cfg          = thresholds.get(gesture_name, {})
+        cooldown_tot = cfg.get("cooldown_frames", 300)
+        cooldown_rem = state["cooldown_remaining"]
+        alert_rem    = alert_states.get(gesture_name, 0)
 
         # ---- DETECTED banner ----------------------------------------
         if alert_rem > 0:
@@ -180,13 +178,24 @@ def draw_gesture_state(
         # ---- Confirmation progress bar ------------------------------
         else:
             y_cursor -= bar_h + pad
-            ratio  = active / confirm_total if confirm_total else 0
-            filled = int(w * ratio)
+            ratio        = state.get("ratio", 0.0)
+            required     = state.get("required_ratio", 0.70)
+            positive     = state.get("positive_frames", 0)
+            window_total = state.get("window_total", 0)
+            window_size  = state.get("window_size", 20)
+            bar_fill     = int(w * ratio)
+            threshold_x  = int(w * required)
+            col_bar      = (0, 200, 200) if ratio >= required else (0, 130, 200)
             overlay = frame.copy()
             cv2.rectangle(overlay, (0, y_cursor), (w, y_cursor + bar_h), (30, 30, 0), -1)
-            cv2.rectangle(overlay, (0, y_cursor), (filled, y_cursor + bar_h), (0, 200, 200), -1)
+            cv2.rectangle(overlay, (0, y_cursor), (bar_fill, y_cursor + bar_h), col_bar, -1)
             cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-            label = f"{gesture_name.replace('_',' ')}  {active}/{confirm_total}"
+            # threshold marker
+            cv2.line(frame, (threshold_x, y_cursor), (threshold_x, y_cursor + bar_h),
+                     (255, 255, 255), 1)
+            label = (f"{gesture_name.replace('_',' ')}  "
+                     f"{positive}/{window_total} frames  "
+                     f"({ratio*100:.0f}% / need {required*100:.0f}%)")
             cv2.putText(frame, label, (pad, y_cursor + bar_h - 4),
                         font, font_scale, (200, 230, 230), thickness, cv2.LINE_AA)
 

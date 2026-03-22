@@ -69,7 +69,19 @@ class CrossedArms(BaseGesture):
         if pose is None:
             return False
 
-        # ---- visibility gate -----------------------------------------
+        # ---- facing-camera gate --------------------------------------
+        # When the subject turns away, landmark left/right assignments
+        # flip and the crossing condition fires spuriously.  The nose
+        # (index 0) is only visible when the face points toward the camera.
+        _NOSE = 0
+        min_face_vis = self.thresholds.get("min_face_visibility", 0.5)
+        try:
+            if pose[_NOSE].visibility < min_face_vis:
+                return False
+        except IndexError:
+            return False
+
+        # ---- landmark visibility gate --------------------------------
         min_vis = self.thresholds.get("min_landmark_visibility", 0.5)
         try:
             for idx in _REQUIRED:
