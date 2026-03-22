@@ -78,17 +78,12 @@ class VideoProcessor:
                 output_segmentation_masks     = False,
             )
         )
-        # Face uses IMAGE mode: performs full detection on every frame so
-        # landmarks always reappear as soon as the face is visible again,
-        # with no dependency on the VIDEO-mode tracker that breaks after
-        # a dropout.  This only affects the debug inset display; pose
-        # and hands remain in VIDEO mode for gesture detection stability.
         self._face_lm = mp_vision.FaceLandmarker.create_from_options(
             mp_vision.FaceLandmarkerOptions(
                 base_options = BaseOptions(
                     model_asset_path=str(self._models_dir / "face_landmarker.task")
                 ),
-                running_mode                   = RunningMode.IMAGE,
+                running_mode                   = RunningMode.VIDEO,
                 num_faces                      = 1,
                 min_face_detection_confidence  = 0.6,
                 min_face_presence_confidence   = 0.6,
@@ -190,9 +185,12 @@ class VideoProcessor:
                             for lm in landmarks["face"]
                         ]
 
+                    clean_frame = frame.copy()  # snapshot before any drawing
                     debug_overlay.draw(frame, landmarks, crossed_arms_cfg)
                     debug_overlay.draw_face_inset(
-                        frame, landmarks, cached_face_lms=self._last_face_lms
+                        frame, landmarks,
+                        cached_face_lms=self._last_face_lms,
+                        source_frame=clean_frame,
                     )
                     debug_overlay.draw_gesture_state(
                         frame,
@@ -225,22 +223,96 @@ class VideoProcessor:
 
     # ------------------------------------------------------------------
     def _run_inference(self, bgr_frame, timestamp_ms: int) -> dict:
-        rgb      = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        h, w   = bgr_frame.shape[:2]
+        rgb    = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-        pose_result = self._pose_lm.detect_for_video(mp_image, timestamp_ms)
-        face_result = self._face_lm.detect(mp_image)           # IMAGE mode
-        hand_result = self._hand_lm.detect_for_video(mp_image, timestamp_ms)
+        pose_result = self._pose_lm.detect_for_video(mp_img, timestamp_ms)
+        hand_result = self._hand_lm.detect_for_video(mp_img, timestamp_ms)
+
+        # ---- face: run on a zoomed-in crop around the head ----------
+        # The face landmarker struggles with small faces (subject far
+        # from camera). We derive a head bounding box from the already-
+        # computed pose landmarks (stable in VIDEO mode), crop that
+        # region, feed it to the face model, then remap the resulting
+        # normalised coordinates back to the full-frame space.
+        face_result, crop_bbox = self._face_inference_on_crop(
+            bgr_frame, pose_result, timestamp_ms, h, w
+        )
 
         landmarks: dict = {}
+
         if pose_result.pose_landmarks:
             landmarks["pose"] = pose_result.pose_landmarks[0]
+
         if face_result.face_landmarks:
-            landmarks["face"] = face_result.face_landmarks[0]
+            if crop_bbox:
+                cx0, cy0, cx1, cy1 = crop_bbox
+                cw, ch = cx1 - cx0, cy1 - cy0
+                # Remap from crop-normalised → full-frame-normalised
+                landmarks["face"] = [
+                    SimpleNamespace(
+                        x = (lm.x * cw + cx0) / w,
+                        y = (lm.y * ch + cy0) / h,
+                        z = lm.z,
+                    )
+                    for lm in face_result.face_landmarks[0]
+                ]
+            else:
+                landmarks["face"] = [
+                    SimpleNamespace(x=lm.x, y=lm.y, z=lm.z)
+                    for lm in face_result.face_landmarks[0]
+                ]
+
         if hand_result.hand_landmarks:
             for hand_lms, handedness in zip(
                 hand_result.hand_landmarks, hand_result.handedness
             ):
                 label = handedness[0].category_name
                 landmarks["left_hand" if label == "Left" else "right_hand"] = hand_lms
+
         return landmarks
+
+    # ------------------------------------------------------------------
+    def _face_inference_on_crop(self, bgr_frame, pose_result, timestamp_ms, h, w):
+        """
+        Crop the head region from bgr_frame using pose head landmarks,
+        run the face landmarker on the crop, and return the result plus
+        the crop bounding box (x0, y0, x1, y1) in pixels.
+
+        Falls back to the full frame if pose is unavailable.
+        """
+        crop_bbox = None
+
+        if pose_result.pose_landmarks:
+            head = [
+                pose_result.pose_landmarks[0][i]
+                for i in range(11)
+                if pose_result.pose_landmarks[0][i].visibility > 0.3
+            ]
+            if head:
+                xs = [lm.x * w for lm in head]
+                ys = [lm.y * h for lm in head]
+                face_w = max(xs) - min(xs)
+                face_h = max(ys) - min(ys)
+                pad_x  = int(face_w * 0.55)
+                pad_y  = int(face_h * 0.75)
+                x0 = max(0, int(min(xs)) - pad_x)
+                y0 = max(0, int(min(ys)) - pad_y)
+                x1 = min(w, int(max(xs)) + pad_x)
+                y1 = min(h, int(max(ys)) + pad_y)
+                if x1 > x0 and y1 > y0:
+                    crop_bbox = (x0, y0, x1, y1)
+
+        if crop_bbox:
+            x0, y0, x1, y1 = crop_bbox
+            crop     = bgr_frame[y0:y1, x0:x1]
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            mp_crop  = mp.Image(image_format=mp.ImageFormat.SRGB, data=crop_rgb)
+            result   = self._face_lm.detect_for_video(mp_crop, timestamp_ms)
+        else:
+            rgb    = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = self._face_lm.detect_for_video(mp_img, timestamp_ms)
+
+        return result, crop_bbox

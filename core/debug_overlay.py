@@ -228,11 +228,14 @@ def draw_face_inset(
     frame: np.ndarray,
     landmarks: dict,
     cached_face_lms=None,
+    source_frame: np.ndarray | None = None,
 ) -> np.ndarray:
     """
-    Crop the face region from *frame*, draw all detected face landmarks
-    on the crop, and embed it as a picture-in-picture in the top-right
-    corner.
+    Crop the face region and embed it as a picture-in-picture in the
+    top-right corner of *frame*.
+
+    source_frame: the clean (un-annotated) frame to crop from.  If None,
+                  falls back to *frame* itself (legacy behaviour).
 
     Bounding box is ALWAYS derived from pose head landmarks (indices 0–10)
     so the window keeps following the face even when the face landmarker
@@ -274,7 +277,8 @@ def draw_face_inset(
         return frame
 
     # ---- crop -------------------------------------------------------
-    crop = frame[y_min:y_max, x_min:x_max].copy()
+    src  = source_frame if source_frame is not None else frame
+    crop = src[y_min:y_max, x_min:x_max].copy()
     ch, cw = crop.shape[:2]
     if cw <= 0 or ch <= 0:
         return frame
