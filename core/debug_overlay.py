@@ -80,9 +80,10 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
                         _px(lm[f"{side}_WRIST"],    w, h), _COL_BONE, 2)
 
     # ---- crossing ratios (new scale-invariant metric) ----------------
-    shoulder_dist = lm["L_SHOULDER"].x - lm["R_SHOULDER"].x  # >0 facing cam
-    min_sd        = thresholds.get("min_shoulder_dist", 0.10)
-    cross_thresh  = thresholds.get("wrist_cross_ratio", 0.50)
+    shoulder_dist      = lm["L_SHOULDER"].x - lm["R_SHOULDER"].x  # >0 facing cam
+    min_shoulder_ratio = thresholds.get("min_shoulder_torso_ratio", 0.40)
+    cross_thresh       = thresholds.get("wrist_cross_ratio", 0.50)
+    shoulder_torso_r   = shoulder_dist / torso_h if torso_h > 0 else 0.0
 
     if shoulder_dist > 0:
         right_ratio = (lm["R_WRIST"].x - lm["R_SHOULDER"].x) / shoulder_dist
@@ -90,7 +91,7 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
     else:
         right_ratio = left_ratio = 0.0
 
-    facing_ok   = shoulder_dist >= min_sd
+    facing_ok   = shoulder_torso_r >= min_shoulder_ratio
     right_ok    = right_ratio >= cross_thresh
     left_ok     = left_ratio  >= cross_thresh
 
@@ -119,7 +120,7 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
     lw_h = (lm["L_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
     rw_h = (lm["R_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
     hud_lines = [
-        (f"shoulder_dist: {shoulder_dist:.3f}  (min {min_sd:.2f})",
+        (f"shoulder/torso: {shoulder_torso_r:.2f}  (min {min_shoulder_ratio:.2f})",
          (0, 220, 0) if facing_ok else (0, 80, 220)),
         (f"R wrist ratio: {right_ratio:.2f}  (need >= {cross_thresh:.2f})",
          (0, 220, 0) if right_ok else (0, 80, 220)),

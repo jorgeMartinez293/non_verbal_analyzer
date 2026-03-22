@@ -30,10 +30,11 @@ facing-camera check.
 
 Configurable thresholds (config/thresholds.json → "crossed_arms")
 -------------------------------------------------------------------
-min_shoulder_dist    (float, default 0.10)
-    Minimum normalised shoulder span.  Below this the geometry is
-    unreliable (person facing away / extreme angle).  Raise to be
-    stricter about requiring a frontal view.
+min_shoulder_torso_ratio  (float, default 0.40)
+    Minimum ratio of shoulder_dist / torso_height.  Both distances
+    shrink equally with subject-to-camera distance, so the ratio is
+    invariant to depth.  A low ratio means the subject is turned
+    sideways or facing away.  Raise to require a more frontal view.
 
 wrist_cross_ratio    (float, default 0.50)
     Both wrists must reach at least this ratio toward the opposite
@@ -85,13 +86,22 @@ class CrossedArms(BaseGesture):
         ls = pose[_L_SHOULDER]; rs = pose[_R_SHOULDER]
         lh = pose[_L_HIP];     rh = pose[_R_HIP]
 
-        # ---- shoulder span gate -------------------------------------
-        # ls.x > rs.x when facing the camera (mirrored axes).
-        # If shoulder_dist is too small the person is facing away or
-        # turned too far sideways — geometry is unreliable.
+        # ---- torso height (needed for both gates below) -------------
+        shoulder_y = (ls.y + rs.y) / 2.0
+        hip_y      = (lh.y + rh.y) / 2.0
+        torso_h    = hip_y - shoulder_y
+        if torso_h <= 0:
+            return False
+
+        # ---- shoulder span gate (facing-camera + distance invariant)
+        # shoulder_dist / torso_h is invariant to distance: both shrink
+        # equally as the subject moves away.  A low ratio means the person
+        # is turned sideways or away, regardless of how close they are.
+        # shoulder_dist must also be positive (ls.x > rs.x) — negative
+        # means the subject is facing away (mirrored axes).
         shoulder_dist = ls.x - rs.x
-        min_sd = self.thresholds.get("min_shoulder_dist", 0.10)
-        if shoulder_dist < min_sd:
+        min_ratio = self.thresholds.get("min_shoulder_torso_ratio", 0.40)
+        if shoulder_dist / torso_h < min_ratio:
             return False
 
         # ---- crossing ratios (scale & angle invariant) --------------
@@ -100,13 +110,6 @@ class CrossedArms(BaseGesture):
 
         threshold = self.thresholds.get("wrist_cross_ratio", 0.50)
         if right_ratio < threshold or left_ratio < threshold:
-            return False
-
-        # ---- height check (wrists within torso band) ----------------
-        shoulder_y = (ls.y + rs.y) / 2.0
-        hip_y      = (lh.y + rh.y) / 2.0
-        torso_h    = hip_y - shoulder_y
-        if torso_h <= 0:
             return False
 
         h_min = self.thresholds.get("wrist_height_min_ratio", 0.0)
