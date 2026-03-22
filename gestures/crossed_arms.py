@@ -86,11 +86,15 @@ class CrossedArms(BaseGesture):
         rh = pose[_R_HIP]
 
         # ---- crossing check ------------------------------------------
-        # In normalised image coords x grows left→right.
-        # Crossed arms: right wrist ends up on the LEFT side of the body,
-        # so right_wrist.x < left_wrist.x.
+        # MediaPipe landmark x: 0 = left edge of image, 1 = right edge.
+        # The subject faces the camera, so their sides are MIRRORED:
+        #   Normal position : LEFT_WRIST appears on the right of the image (high x)
+        #                     RIGHT_WRIST appears on the left of the image (low x)
+        #                     → rw.x < lw.x  always in normal pose
+        #   Crossed arms    : right wrist swings to the person's left = right of image
+        #                     → rw.x > lw.x
         margin = self.thresholds.get("wrist_cross_margin", 0.05)
-        if not (rw.x < lw.x - margin):
+        if not (rw.x > lw.x + margin):
             return False
 
         # ---- height check (relative to torso) ------------------------

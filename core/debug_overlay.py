@@ -107,7 +107,8 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
 
     # ---- wrist-to-wrist line (colour = crossing condition) -----------
     margin       = thresholds.get("wrist_cross_margin", 0.05)
-    cross_value  = lm["L_WRIST"].x - lm["R_WRIST"].x   # positive = crossed
+    # Positive when R_WRIST is to the RIGHT of L_WRIST in image coords = crossed
+    cross_value  = lm["R_WRIST"].x - lm["L_WRIST"].x
     cross_met    = cross_value >= margin
 
     p_lw = _px(lm["L_WRIST"], w, h)
@@ -139,7 +140,7 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
     rw_ratio = (lm["R_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
 
     lines = [
-        (f"cross: {cross_value:+.3f}  (need >= {margin:.3f})",
+        (f"R-L wrist: {cross_value:+.3f}  (need >= {margin:.3f})",
          _COL_HUD_OK if cross_met else _COL_HUD_FAIL),
         (f"L_wrist height ratio: {lw_ratio:.2f}  [{h_min:.1f} – {h_max:.1f}]",
          _COL_HUD_OK if h_min <= lw_ratio <= h_max else _COL_HUD_FAIL),
