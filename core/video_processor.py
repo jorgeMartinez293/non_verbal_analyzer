@@ -1,33 +1,16 @@
 """
-Video Processor  (MediaPipe Tasks API — mediapipe >= 0.10)
+Video Processor — debug-viz branch
 
-Runs three separate landmarkers in VIDEO mode:
-  • PoseLandmarker   (heavy model) — 33 pose landmarks + 3-D world landmarks
-  • FaceLandmarker                 — 478-point face mesh
-  • HandLandmarker                 — 21 landmarks per hand, up to 2 hands
+Processes every frame, draws landmarks + gesture state on each one,
+and writes the full annotated video to:
+    <output_dir>/<video_stem>_annotated.mp4
 
-Landmarks are packaged into a plain dict and forwarded to GestureManager.
-
-Frame processing order
-----------------------
-  a) Read BGR frame from VideoCapture
-  b) clip_saver.add_post_frame(frame) — feeds any pending clips
-  c) Run all three landmarkers on the frame
-  d) Append frame to rolling pre-trigger buffer
-  e) Ask GestureManager if any gesture fired
-  f) For each fired gesture → clip_saver.trigger(pre_frames=list(buffer))
-
-Model files
------------
-Expected in the models/ directory next to this package root:
-  models/pose_landmarker_heavy.task
-  models/face_landmarker.task
-  models/hand_landmarker.task
+No clip saving in this branch — the goal is full-video visualisation
+so gesture detection logic can be debugged frame by frame.
 """
 
 from __future__ import annotations
 
-from collections import deque
 from pathlib import Path
 
 import cv2
@@ -39,8 +22,10 @@ from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
 )
 
 from core.gesture_manager import GestureManager
-from core.clip_saver import ClipSaver
 from core import debug_overlay
+
+# How many frames to keep the DETECTED banner visible after a trigger
+_ALERT_FRAMES = 45
 
 
 class VideoProcessor:
@@ -48,17 +33,12 @@ class VideoProcessor:
     def __init__(
         self,
         gesture_manager: GestureManager,
-        clip_saver: ClipSaver,
         config: dict,
-        debug: bool = False,
+        output_dir: str = "output",
     ):
         self.gesture_manager = gesture_manager
-        self.clip_saver      = clip_saver
         self.config          = config
-        self.debug           = debug
-
-        frames_before = config.get("clip", {}).get("frames_before", 10)
-        self._buffer  = deque(maxlen=frames_before)
+        self.output_dir      = Path(output_dir)
 
         self._models_dir = Path(__file__).parent.parent / "models"
         self._pose_lm    = None
@@ -66,52 +46,49 @@ class VideoProcessor:
         self._hand_lm    = None
 
     # ------------------------------------------------------------------
-    def _build_landmarkers(self, fps: float):
-        """Instantiate the three landmarkers in VIDEO running mode."""
-        BaseOptions  = mp_tasks.BaseOptions
-        RunningMode  = VisionTaskRunningMode
+    def _build_landmarkers(self):
+        BaseOptions = mp_tasks.BaseOptions
+        RunningMode = VisionTaskRunningMode
 
-        # ---- Pose (heavy = most accurate) ----------------------------
-        pose_opts = mp_vision.PoseLandmarkerOptions(
-            base_options     = BaseOptions(
-                model_asset_path = str(self._models_dir / "pose_landmarker_heavy.task")
-            ),
-            running_mode         = RunningMode.VIDEO,
-            num_poses            = 1,
-            min_pose_detection_confidence  = 0.6,
-            min_pose_presence_confidence   = 0.6,
-            min_tracking_confidence        = 0.6,
-            output_segmentation_masks      = False,
+        self._pose_lm = mp_vision.PoseLandmarker.create_from_options(
+            mp_vision.PoseLandmarkerOptions(
+                base_options = BaseOptions(
+                    model_asset_path=str(self._models_dir / "pose_landmarker_heavy.task")
+                ),
+                running_mode                   = RunningMode.VIDEO,
+                num_poses                      = 1,
+                min_pose_detection_confidence  = 0.6,
+                min_pose_presence_confidence   = 0.6,
+                min_tracking_confidence        = 0.6,
+                output_segmentation_masks      = False,
+            )
         )
-        self._pose_lm = mp_vision.PoseLandmarker.create_from_options(pose_opts)
-
-        # ---- Face ----------------------------------------------------
-        face_opts = mp_vision.FaceLandmarkerOptions(
-            base_options = BaseOptions(
-                model_asset_path = str(self._models_dir / "face_landmarker.task")
-            ),
-            running_mode                   = RunningMode.VIDEO,
-            num_faces                      = 1,
-            min_face_detection_confidence  = 0.6,
-            min_face_presence_confidence   = 0.6,
-            min_tracking_confidence        = 0.6,
-            output_face_blendshapes        = False,
-            output_facial_transformation_matrixes = False,
+        self._face_lm = mp_vision.FaceLandmarker.create_from_options(
+            mp_vision.FaceLandmarkerOptions(
+                base_options = BaseOptions(
+                    model_asset_path=str(self._models_dir / "face_landmarker.task")
+                ),
+                running_mode                   = RunningMode.VIDEO,
+                num_faces                      = 1,
+                min_face_detection_confidence  = 0.6,
+                min_face_presence_confidence   = 0.6,
+                min_tracking_confidence        = 0.6,
+                output_face_blendshapes        = False,
+                output_facial_transformation_matrixes = False,
+            )
         )
-        self._face_lm = mp_vision.FaceLandmarker.create_from_options(face_opts)
-
-        # ---- Hands ---------------------------------------------------
-        hand_opts = mp_vision.HandLandmarkerOptions(
-            base_options = BaseOptions(
-                model_asset_path = str(self._models_dir / "hand_landmarker.task")
-            ),
-            running_mode                    = RunningMode.VIDEO,
-            num_hands                       = 2,
-            min_hand_detection_confidence   = 0.6,
-            min_hand_presence_confidence    = 0.6,
-            min_tracking_confidence         = 0.6,
+        self._hand_lm = mp_vision.HandLandmarker.create_from_options(
+            mp_vision.HandLandmarkerOptions(
+                base_options = BaseOptions(
+                    model_asset_path=str(self._models_dir / "hand_landmarker.task")
+                ),
+                running_mode                  = RunningMode.VIDEO,
+                num_hands                     = 2,
+                min_hand_detection_confidence = 0.6,
+                min_hand_presence_confidence  = 0.6,
+                min_tracking_confidence       = 0.6,
+            )
         )
-        self._hand_lm = mp_vision.HandLandmarker.create_from_options(hand_opts)
 
     # ------------------------------------------------------------------
     def process(self, video_path: str) -> None:
@@ -125,12 +102,27 @@ class VideoProcessor:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         video_stem   = Path(video_path).stem
 
-        print(f"\n[VideoProcessor] File   : {video_path}")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        out_path = self.output_dir / f"{video_stem}_annotated.mp4"
+        writer   = cv2.VideoWriter(
+            str(out_path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            (width, height),
+        )
+
+        print(f"\n[VideoProcessor] Input  : {video_path}")
+        print(f"[VideoProcessor] Output : {out_path}")
         print(f"[VideoProcessor] Size   : {width}x{height}  |  FPS: {fps:.2f}  |  Frames: {total_frames}\n")
 
-        self._build_landmarkers(fps)
+        self._build_landmarkers()
 
-        crossed_arms_thresholds = self.config.get("crossed_arms", {})
+        # alert_states tracks how many frames to keep each gesture's banner visible
+        alert_states: dict[str, int] = {
+            g.name: 0 for g in self.gesture_manager.gestures
+        }
+
+        crossed_arms_cfg = self.config.get("crossed_arms", {})
 
         try:
             frame_idx = 0
@@ -139,67 +131,52 @@ class VideoProcessor:
                 if not ret:
                     break
 
-                # (b) run inference first so we can annotate before buffering
+                # --- inference ----------------------------------------
                 timestamp_ms = int(frame_idx * 1000 / fps)
                 landmarks    = self._run_inference(frame, timestamp_ms)
 
-                # (c) annotate frame if debug mode is on
-                display_frame = (
-                    debug_overlay.draw(frame, landmarks, crossed_arms_thresholds)
-                    if self.debug else frame
+                # --- gesture detection (updates internal state) -------
+                triggered = self.gesture_manager.process_frame(landmarks)
+                for name in triggered:
+                    alert_states[name] = _ALERT_FRAMES
+                    print(f"[VideoProcessor] ✓ '{name}' at frame {frame_idx}")
+
+                # --- draw landmarks -----------------------------------
+                debug_overlay.draw(frame, landmarks, crossed_arms_cfg)
+
+                # --- draw gesture state panel -------------------------
+                debug_overlay.draw_gesture_state(
+                    frame,
+                    self.gesture_manager.get_states(),
+                    alert_states,
+                    self.config,
                 )
 
-                # (d) feed post-trigger frames to pending clips
-                self.clip_saver.add_post_frame(display_frame)
+                # --- tick down alert counters -------------------------
+                for name in alert_states:
+                    if alert_states[name] > 0:
+                        alert_states[name] -= 1
 
-                # (e) append to rolling buffer (trigger frame ends up last)
-                self._buffer.append(display_frame.copy())
-
-                # (f) gesture detection + clip trigger
-                triggered = self.gesture_manager.process_frame(landmarks)
-                for gesture_name in triggered:
-                    print(
-                        f"[VideoProcessor] ✓ Gesture '{gesture_name}' "
-                        f"confirmed at frame {frame_idx}"
-                    )
-                    self.clip_saver.trigger(
-                        gesture_name      = gesture_name,
-                        pre_frames        = list(self._buffer),
-                        trigger_frame_idx = frame_idx,
-                        video_stem        = video_stem,
-                        fps               = fps,
-                        width             = width,
-                        height            = height,
-                    )
-
+                writer.write(frame)
                 frame_idx += 1
+
                 if frame_idx % 100 == 0:
                     pct = frame_idx / total_frames * 100 if total_frames else 0
-                    print(
-                        f"[VideoProcessor] {frame_idx}/{total_frames} "
-                        f"frames processed ({pct:.1f}%)"
-                    )
+                    print(f"[VideoProcessor] {frame_idx}/{total_frames}  ({pct:.1f}%)")
 
         finally:
             cap.release()
+            writer.release()
             self._pose_lm.close()
             self._face_lm.close()
             self._hand_lm.close()
 
-        self.clip_saver.flush()
-        print(f"\n[VideoProcessor] Done. {frame_idx} frames processed.")
+        print(f"\n[VideoProcessor] Done. Annotated video saved to: {out_path}")
 
     # ------------------------------------------------------------------
     def _run_inference(self, bgr_frame, timestamp_ms: int) -> dict:
-        """
-        Run all three landmarkers and return a unified landmarks dict:
-            'pose'       → list[NormalizedLandmark] (33)   or None
-            'face'       → list[NormalizedLandmark] (478)  or None
-            'left_hand'  → list[NormalizedLandmark] (21)   or None
-            'right_hand' → list[NormalizedLandmark] (21)   or None
-        """
-        rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-        mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        rgb      = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
         pose_result = self._pose_lm.detect_for_video(mp_image, timestamp_ms)
         face_result = self._face_lm.detect_for_video(mp_image, timestamp_ms)
@@ -207,25 +184,15 @@ class VideoProcessor:
 
         landmarks: dict = {}
 
-        # Pose — take first detected person
         if pose_result.pose_landmarks:
             landmarks["pose"] = pose_result.pose_landmarks[0]
-
-        # Face — take first detected face
         if face_result.face_landmarks:
             landmarks["face"] = face_result.face_landmarks[0]
-
-        # Hands — split by handedness label ("Left" / "Right")
-        # Note: MediaPipe reports handedness from the *camera's* perspective,
-        # which is mirrored vs the subject; for pre-recorded video the raw
-        # label is used as-is.  Gesture files that care about which hand is
-        # which should inspect the 'handedness' key if needed.
         if hand_result.hand_landmarks:
-            for hand_lms, handedness_list in zip(
+            for hand_lms, handedness in zip(
                 hand_result.hand_landmarks, hand_result.handedness
             ):
-                label = handedness_list[0].category_name  # "Left" or "Right"
-                key   = "left_hand" if label == "Left" else "right_hand"
-                landmarks[key] = hand_lms
+                label = handedness[0].category_name
+                landmarks["left_hand" if label == "Left" else "right_hand"] = hand_lms
 
         return landmarks

@@ -1,21 +1,17 @@
 """
-Non-Verbal Language Analyzer
-=============================
-Analyzes a pre-recorded MP4 video for non-verbal gestures using
-MediaPipe Holistic (pose + face + hands).
-
-When a gesture is confirmed, a ~20-frame clip (configurable via
-config/thresholds.json) is saved to the output directory.
+Non-Verbal Language Analyzer — debug-viz branch
+================================================
+Processes a pre-recorded MP4 and outputs a fully annotated copy with:
+  • Pose landmarks (wrists, elbows, shoulders, hips)
+  • Wrist-to-wrist crossing line (green = condition met, red = not)
+  • Torso height band
+  • Live threshold values (top-left HUD)
+  • Gesture confirmation progress bar (bottom of frame)
+  • DETECTED banner when a gesture fires
 
 Usage
 -----
     python main.py <video_path> [--output-dir OUTPUT] [--config CONFIG]
-
-Examples
---------
-    python main.py interview.mp4
-    python main.py interview.mp4 --output-dir results/
-    python main.py interview.mp4 --config config/thresholds.json
 """
 
 import argparse
@@ -26,36 +22,22 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Analyze non-verbal language in a pre-recorded MP4 video."
+        description="Output a fully annotated debug video with gesture detection."
     )
-    parser.add_argument(
-        "video_path",
-        help="Path to the input .mp4 video file.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="output",
-        help="Directory where gesture clips will be saved (default: output/).",
-    )
-    parser.add_argument(
-        "--config",
-        default="config/thresholds.json",
-        help="Path to the thresholds configuration file (default: config/thresholds.json).",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Draw pose landmarks and live threshold values on saved clips.",
-    )
+    parser.add_argument("video_path", help="Path to the input .mp4 file.")
+    parser.add_argument("--output-dir", default="output",
+                        help="Directory for the annotated output video (default: output/).")
+    parser.add_argument("--config", default="config/thresholds.json",
+                        help="Thresholds config file (default: config/thresholds.json).")
     return parser.parse_args()
 
 
 def load_config(path: str) -> dict:
-    cfg_path = Path(path)
-    if not cfg_path.exists():
-        print(f"[ERROR] Config file not found: {path}", file=sys.stderr)
+    cfg = Path(path)
+    if not cfg.exists():
+        print(f"[ERROR] Config not found: {path}", file=sys.stderr)
         sys.exit(1)
-    with cfg_path.open() as f:
+    with cfg.open() as f:
         return json.load(f)
 
 
@@ -63,21 +45,11 @@ def main() -> None:
     args   = parse_args()
     config = load_config(args.config)
 
-    # Late imports so startup errors surface cleanly
-    from core.clip_saver       import ClipSaver
-    from core.gesture_manager  import GestureManager
-    from core.video_processor  import VideoProcessor
-
-    clip_cfg = config.get("clip", {})
-    clip_saver = ClipSaver(
-        frames_before = clip_cfg.get("frames_before", 10),
-        frames_after  = clip_cfg.get("frames_after",  10),
-        output_dir    = args.output_dir,
-    )
+    from core.gesture_manager import GestureManager
+    from core.video_processor import VideoProcessor
 
     gesture_manager = GestureManager(config)
-    processor       = VideoProcessor(gesture_manager, clip_saver, config, debug=args.debug)
-
+    processor       = VideoProcessor(gesture_manager, config, output_dir=args.output_dir)
     processor.process(args.video_path)
 
 

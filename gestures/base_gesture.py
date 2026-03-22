@@ -34,6 +34,15 @@ class BaseGesture(ABC):
         """
         ...
 
+    @property
+    def state(self) -> dict:
+        """Current internal state, useful for debug overlays."""
+        return {
+            "active_frames":     self._active_frames,
+            "cooldown_remaining": self._cooldown_remaining,
+            "in_cooldown":       self._cooldown_remaining > 0,
+        }
+
     def update(self, landmarks: dict) -> bool:
         """
         Called once per frame. Handles the confirmation buffer and cooldown

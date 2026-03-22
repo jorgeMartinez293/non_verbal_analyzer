@@ -58,6 +58,10 @@ class GestureManager:
             print("[GestureManager] Warning: no gesture files found.")
 
     # ------------------------------------------------------------------
+    def get_states(self) -> dict[str, dict]:
+        """Return the current internal state of every loaded gesture."""
+        return {g.name: g.state for g in self.gestures}
+
     def process_frame(self, landmarks: dict) -> list[str]:
         """
         Update every gesture detector with the current frame's landmarks.
