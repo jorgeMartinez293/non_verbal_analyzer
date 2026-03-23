@@ -185,7 +185,8 @@ class VideoProcessor:
                         ]
 
                     clean_frame = frame.copy()  # snapshot before any drawing
-                    debug_overlay.draw(frame, landmarks, self.config)
+                    debug_overlay.draw(frame, landmarks, self.config,
+                                       gesture_states=self.gesture_manager.get_states())
                     debug_overlay.draw_face_inset(
                         frame, landmarks,
                         cached_face_lms=self._last_face_lms,

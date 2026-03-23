@@ -44,7 +44,8 @@ def _px(lm, w: int, h: int) -> tuple[int, int]:
 
 
 # -----------------------------------------------------------------------
-def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
+def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
+         gesture_states: dict | None = None) -> np.ndarray:
     """Draw the 8 pose keypoints and diagnostic lines onto *frame* (in-place)."""
     h, w = frame.shape[:2]
     pose = landmarks.get("pose")
@@ -141,7 +142,9 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
 
     # ---- eyebrow ratios (from face landmarks) -----------------------
     face        = landmarks.get("face")
-    brow_thresh = thresholds.get("raised_eyebrows", {}).get("eyebrow_raise_ratio", 0.45)
+    re_state    = (gesture_states or {}).get("raised_eyebrows", {})
+    brow_thresh = (re_state.get("personalized_thr")
+                   or thresholds.get("raised_eyebrows", {}).get("eyebrow_raise_ratio", 0.45))
     if face and len(face) > 473:
         inter_iris = abs(face[468].x - face[473].x)
         if inter_iris > 0:
@@ -210,6 +213,21 @@ def draw_gesture_state(
             cv2.putText(frame, label,
                         ((w - tw) // 2, y_cursor + banner_h - pad),
                         font, font_scale * 1.4, (255, 255, 255), 2, cv2.LINE_AA)
+
+        # ---- Calibration progress bar -------------------------------
+        elif state.get("calibrating"):
+            y_cursor -= bar_h + pad
+            calib_n   = state.get("calib_samples", 0)
+            calib_tot = max(1, state.get("calib_target", 500))
+            ratio     = calib_n / calib_tot
+            filled    = int(w * ratio)
+            overlay   = frame.copy()
+            cv2.rectangle(overlay, (0, y_cursor), (w, y_cursor + bar_h), (30, 30, 80), -1)
+            cv2.rectangle(overlay, (0, y_cursor), (filled, y_cursor + bar_h), (200, 180, 0), -1)
+            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+            label = f"{gesture_name.replace('_', ' ')}  calibrating {calib_n}/{calib_tot}"
+            cv2.putText(frame, label, (pad, y_cursor + bar_h - 4),
+                        font, font_scale, (220, 210, 80), thickness, cv2.LINE_AA)
 
         # ---- Cooldown bar -------------------------------------------
         elif cooldown_rem > 0:
