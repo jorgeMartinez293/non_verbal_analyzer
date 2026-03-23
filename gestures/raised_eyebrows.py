@@ -32,12 +32,6 @@ Noise filtering during calibration uses two camera-distance-invariant guards:
   2. Plausibility bounds — ratio must be in [_RATIO_MIN, _RATIO_MAX]; values
                            outside indicate a spurious face detection.
 
-Retroactive detection
----------------------
-Frames buffered during calibration are re-evaluated with the personalised
-threshold once calibration is complete.  Any confirmation windows that
-would have fired are queued as retroactive triggers (capped at 3).
-
 Configurable thresholds (config/thresholds.json → "raised_eyebrows")
 ----------------------------------------------------------------------
 eyebrow_raise_ratio       (float, default 0.45)  — fallback threshold before calibration
@@ -57,12 +51,10 @@ from gestures.base_gesture import BaseGesture
 _R_BROW_TOP = [70, 63, 105, 66, 107]
 _L_BROW_TOP = [300, 293, 334, 296, 336]
 
-_R_EYE_UPPER = 159
-_L_EYE_UPPER = 386
-_R_IRIS      = 468
-_L_IRIS      = 473
+_R_IRIS = 468
+_L_IRIS = 473
 
-_REQUIRED = _R_BROW_TOP + _L_BROW_TOP + [_R_EYE_UPPER, _L_EYE_UPPER, _R_IRIS, _L_IRIS]
+_REQUIRED = _R_BROW_TOP + _L_BROW_TOP + [_R_IRIS, _L_IRIS]
 
 # Physically plausible bounds for the brow-to-eye ratio (camera-distance invariant)
 _RATIO_MIN = 0.10
@@ -78,7 +70,6 @@ class RaisedEyebrows(BaseGesture):
         self._calib_stable_streak = 0
         self._personalized_thr    = thresholds.get("eyebrow_raise_ratio", 0.45)
         self._baseline            = None
-        self._retroactive_pending = 0
 
     # ------------------------------------------------------------------
     def update(self, landmarks: dict) -> bool:
@@ -88,13 +79,6 @@ class RaisedEyebrows(BaseGesture):
             if len(self._calib_samples) >= target:
                 self._finalize_calibration()
             return False
-
-        # Emit queued retroactive trigger (one per cooldown cycle)
-        if self._retroactive_pending > 0 and self._cooldown_remaining == 0:
-            self._retroactive_pending -= 1
-            self._cooldown_remaining = self.thresholds.get("cooldown_frames", 45)
-            self._window.clear()
-            return True
 
         return super().update(landmarks)
 
@@ -111,8 +95,8 @@ class RaisedEyebrows(BaseGesture):
 
         brow_y_right = statistics.mean(face[i].y for i in _R_BROW_TOP)
         brow_y_left  = statistics.mean(face[i].y for i in _L_BROW_TOP)
-        ratio_right  = (face[_R_EYE_UPPER].y - brow_y_right) / inter_iris
-        ratio_left   = (face[_L_EYE_UPPER].y - brow_y_left)  / inter_iris
+        ratio_right  = (face[_R_IRIS].y - brow_y_right) / inter_iris
+        ratio_left   = (face[_L_IRIS].y - brow_y_left)  / inter_iris
 
         return ratio_right >= self._personalized_thr and ratio_left >= self._personalized_thr
 
@@ -143,8 +127,8 @@ class RaisedEyebrows(BaseGesture):
 
         brow_y_right = statistics.mean(face[i].y for i in _R_BROW_TOP)
         brow_y_left  = statistics.mean(face[i].y for i in _L_BROW_TOP)
-        ratio_r = (face[_R_EYE_UPPER].y - brow_y_right) / inter_iris
-        ratio_l = (face[_L_EYE_UPPER].y - brow_y_left)  / inter_iris
+        ratio_r = (face[_R_IRIS].y - brow_y_right) / inter_iris
+        ratio_l = (face[_L_IRIS].y - brow_y_left)  / inter_iris
 
         # Plausibility gate — camera-distance invariant
         if not (_RATIO_MIN <= ratio_r <= _RATIO_MAX and
@@ -171,21 +155,5 @@ class RaisedEyebrows(BaseGesture):
         print(f"[RaisedEyebrows] Calibration complete. "
               f"baseline={self._baseline:.3f}  threshold={self._personalized_thr:.3f}")
 
-        # Retroactive replay with personalised threshold
-        fired = [r >= self._personalized_thr and l >= self._personalized_thr
-                 for r, l in self._calib_samples]
-        window_size = self.thresholds.get("confirmation_window", 8)
-        min_ratio   = self.thresholds.get("confirmation_ratio", 0.70)
-        triggers    = 0
-        i = 0
-        while i <= len(fired) - window_size:
-            w = fired[i: i + window_size]
-            if sum(w) / len(w) >= min_ratio:
-                triggers += 1
-                i += window_size    # skip window to avoid double-counting
-            else:
-                i += 1
-
-        self._retroactive_pending = min(triggers, 3)
-        self._calib_complete      = True
-        self._calib_samples       = []     # free memory
+        self._calib_complete = True
+        self._calib_samples  = []     # free memory

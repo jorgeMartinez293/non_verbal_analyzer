@@ -22,10 +22,10 @@
     "cooldown_frames": 50
   },
   "raised_eyebrows": {
-    "eyebrow_raise_ratio": 0.45,
+    "eyebrow_raise_ratio": 0.55,
     "eyebrow_raise_delta": 0.10,
     "min_inter_iris_dist": 0.06,
-    "calibration_min_samples": 100,
+    "calibration_min_samples": 200,
     "calibration_percentile": 10,
     "calib_stability_window": 8,
     "confirmation_window": 8,

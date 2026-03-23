@@ -150,22 +150,22 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
         if inter_iris > 0:
             r_brow = statistics.mean(face[i].y for i in [70, 63, 105, 66, 107])
             l_brow = statistics.mean(face[i].y for i in [300, 293, 334, 296, 336])
-            ratio_r = (face[159].y - r_brow) / inter_iris
-            ratio_l = (face[386].y - l_brow) / inter_iris
+            ratio_r = (face[468].y - r_brow) / inter_iris
+            ratio_l = (face[473].y - l_brow) / inter_iris
             hud_lines.append((f"iris: {inter_iris:.3f}",
                                (200, 200, 200)))
-            hud_lines.append((f"rb-re: {ratio_r:.2f}  (>= {brow_thresh:.2f})",
+            hud_lines.append((f"rb-ri: {ratio_r:.2f}  (>= {brow_thresh:.2f})",
                                (0, 220, 0) if ratio_r >= brow_thresh else (0, 80, 220)))
-            hud_lines.append((f"lb-le: {ratio_l:.2f}  (>= {brow_thresh:.2f})",
+            hud_lines.append((f"lb-li: {ratio_l:.2f}  (>= {brow_thresh:.2f})",
                                (0, 220, 0) if ratio_l >= brow_thresh else (0, 80, 220)))
         else:
             hud_lines += [("iris: no iris", (100, 100, 100)),
-                          ("rb-re: no iris", (100, 100, 100)),
-                          ("lb-le: no iris", (100, 100, 100))]
+                          ("rb-ri: no iris", (100, 100, 100)),
+                          ("lb-li: no iris", (100, 100, 100))]
     else:
         hud_lines += [("iris: no face", (100, 100, 100)),
-                      ("rb-re: no face", (100, 100, 100)),
-                      ("lb-le: no face", (100, 100, 100))]
+                      ("rb-ri: no face", (100, 100, 100)),
+                      ("lb-li: no face", (100, 100, 100))]
     _put_hud(frame, hud_lines, w, h, y_offset=0)
     return frame
 
