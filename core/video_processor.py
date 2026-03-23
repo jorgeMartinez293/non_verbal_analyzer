@@ -135,7 +135,6 @@ class VideoProcessor:
 
         self._build_landmarkers()
 
-        crossed_arms_cfg = self.config.get("crossed_arms", {})
         alert_states: dict[str, int] = {g.name: 0 for g in self.gesture_manager.gestures}
 
         try:
@@ -186,7 +185,7 @@ class VideoProcessor:
                         ]
 
                     clean_frame = frame.copy()  # snapshot before any drawing
-                    debug_overlay.draw(frame, landmarks, crossed_arms_cfg)
+                    debug_overlay.draw(frame, landmarks, self.config)
                     debug_overlay.draw_face_inset(
                         frame, landmarks,
                         cached_face_lms=self._last_face_lms,

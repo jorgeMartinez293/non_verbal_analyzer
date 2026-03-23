@@ -17,7 +17,9 @@ Public functions:
 
 from __future__ import annotations
 import cv2
+import math
 import numpy as np
+import statistics
 
 # MediaPipe Pose landmark indices used by CrossedArms
 _IDX = {
@@ -61,8 +63,9 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
     shoulder_y = (lm["L_SHOULDER"].y + lm["R_SHOULDER"].y) / 2.0
     hip_y      = (lm["L_HIP"].y     + lm["R_HIP"].y)      / 2.0
     torso_h    = hip_y - shoulder_y
-    h_min      = thresholds.get("wrist_height_min_ratio", 0.0)
-    h_max      = thresholds.get("wrist_height_max_ratio", 1.1)
+    crossed_cfg = thresholds.get("crossed_arms", thresholds)  # full config or sub-dict
+    h_min      = crossed_cfg.get("wrist_height_min_ratio", 0.0)
+    h_max      = crossed_cfg.get("wrist_height_max_ratio", 1.1)
 
     band_top    = int((shoulder_y + h_min * torso_h) * h)
     band_bottom = int((shoulder_y + h_max * torso_h) * h)
@@ -84,10 +87,8 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
                         _px(lm[f"{side}_WRIST"],    w, h), _COL_BONE, 2)
 
     # ---- crossing ratios (new scale-invariant metric) ----------------
-    shoulder_dist      = lm["L_SHOULDER"].x - lm["R_SHOULDER"].x  # >0 facing cam
-    min_shoulder_ratio = thresholds.get("min_shoulder_torso_ratio", 0.40)
-    cross_thresh       = thresholds.get("wrist_cross_ratio", 0.50)
-    shoulder_torso_r   = shoulder_dist / torso_h if torso_h > 0 else 0.0
+    shoulder_dist = lm["L_SHOULDER"].x - lm["R_SHOULDER"].x  # >0 facing cam
+    cross_thresh  = crossed_cfg.get("wrist_cross_ratio", 0.50)
 
     if shoulder_dist > 0:
         right_ratio = (lm["R_WRIST"].x - lm["R_SHOULDER"].x) / shoulder_dist
@@ -95,7 +96,6 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
     else:
         right_ratio = left_ratio = 0.0
 
-    facing_ok   = shoulder_torso_r >= min_shoulder_ratio
     right_ok    = right_ratio >= cross_thresh
     left_ok     = left_ratio  >= cross_thresh
 
@@ -121,20 +121,48 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict) -> np.ndarray:
         cv2.circle(frame, _px(lm[name], w, h), 6, (255, 255, 255), 1)
 
     # ---- HUD values --------------------------------------------------
-    lw_h = (lm["L_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
-    rw_h = (lm["R_WRIST"].y - shoulder_y) / torso_h if torso_h > 0 else 0
+    shoulder_eu  = math.sqrt((lm["L_SHOULDER"].x - lm["R_SHOULDER"].x) ** 2 +
+                             (lm["L_SHOULDER"].y - lm["R_SHOULDER"].y) ** 2)
+    wrist_eu     = math.sqrt((lm["L_WRIST"].x - lm["R_WRIST"].x) ** 2 +
+                             (lm["L_WRIST"].y - lm["R_WRIST"].y) ** 2)
+    open_ratio   = wrist_eu / shoulder_eu if shoulder_eu > 0 else 0.0
+    open_thresh  = thresholds.get("open_arms", {}).get("min_open_ratio", 2.0)
+
     hud_lines = [
-        (f"shoulder/torso: {shoulder_torso_r:.2f}  (min {min_shoulder_ratio:.2f})",
-         (0, 220, 0) if facing_ok else (0, 80, 220)),
-        (f"R wrist ratio: {right_ratio:.2f}  (need >= {cross_thresh:.2f})",
+        (f"ls-rs: {shoulder_eu:.3f}",
+         (200, 200, 200)),
+        (f"rw-ls: {right_ratio:.2f}  (>= {cross_thresh:.2f})",
          (0, 220, 0) if right_ok else (0, 80, 220)),
-        (f"L wrist ratio: {left_ratio:.2f}  (need >= {cross_thresh:.2f})",
+        (f"lw-rs: {left_ratio:.2f}  (>= {cross_thresh:.2f})",
          (0, 220, 0) if left_ok else (0, 80, 220)),
-        (f"L wrist height: {lw_h:.2f}  [{h_min:.1f}-{h_max:.1f}]",
-         (0, 220, 0) if h_min <= lw_h <= h_max else (0, 80, 220)),
-        (f"R wrist height: {rw_h:.2f}  [{h_min:.1f}-{h_max:.1f}]",
-         (0, 220, 0) if h_min <= rw_h <= h_max else (0, 80, 220)),
+        (f"lw-rw: {open_ratio:.2f}  (>= {open_thresh:.2f})",
+         (0, 220, 0) if open_ratio >= open_thresh else (0, 80, 220)),
     ]
+
+    # ---- eyebrow ratios (from face landmarks) -----------------------
+    face        = landmarks.get("face")
+    brow_thresh = thresholds.get("raised_eyebrows", {}).get("eyebrow_raise_ratio", 0.45)
+    if face and len(face) > 473:
+        inter_iris = abs(face[468].x - face[473].x)
+        if inter_iris > 0:
+            r_brow = statistics.mean(face[i].y for i in [70, 63, 105, 66, 107])
+            l_brow = statistics.mean(face[i].y for i in [300, 293, 334, 296, 336])
+            ratio_r = (face[159].y - r_brow) / inter_iris
+            ratio_l = (face[386].y - l_brow) / inter_iris
+            hud_lines.append((f"iris: {inter_iris:.3f}",
+                               (200, 200, 200)))
+            hud_lines.append((f"rb-re: {ratio_r:.2f}  (>= {brow_thresh:.2f})",
+                               (0, 220, 0) if ratio_r >= brow_thresh else (0, 80, 220)))
+            hud_lines.append((f"lb-le: {ratio_l:.2f}  (>= {brow_thresh:.2f})",
+                               (0, 220, 0) if ratio_l >= brow_thresh else (0, 80, 220)))
+        else:
+            hud_lines += [("iris: no iris", (100, 100, 100)),
+                          ("rb-re: no iris", (100, 100, 100)),
+                          ("lb-le: no iris", (100, 100, 100))]
+    else:
+        hud_lines += [("iris: no face", (100, 100, 100)),
+                      ("rb-re: no face", (100, 100, 100)),
+                      ("lb-le: no face", (100, 100, 100))]
     _put_hud(frame, hud_lines, w, h, y_offset=0)
     return frame
 

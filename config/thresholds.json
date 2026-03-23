@@ -13,6 +13,14 @@
     "confirmation_ratio": 0.70,
     "cooldown_frames": 50
   },
+  "open_arms": {
+    "min_open_ratio": 2.5,
+    "min_shoulder_torso_ratio": 0.25,
+    "min_landmark_visibility": 0.5,
+    "confirmation_window": 10,
+    "confirmation_ratio": 0.70,
+    "cooldown_frames": 50
+  },
   "raised_eyebrows": {
     "eyebrow_raise_ratio": 0.45,
     "min_inter_iris_dist": 0.06,
