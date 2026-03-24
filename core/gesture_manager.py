@@ -62,6 +62,15 @@ class GestureManager:
         """Return the current internal state of every loaded gesture."""
         return {g.name: g.state for g in self.gestures}
 
+    def reset_windows(self) -> None:
+        """Clear the sliding-window confirmation state of every gesture.
+
+        Called when tracking is deemed unstable so that noisy landmark
+        positions do not accumulate toward a false positive.
+        """
+        for gesture in self.gestures:
+            gesture._window.clear()
+
     def process_frame(self, landmarks: dict) -> list[str]:
         """
         Update every gesture detector with the current frame's landmarks.

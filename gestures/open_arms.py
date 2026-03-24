@@ -5,30 +5,27 @@ Detection logic
 ---------------
 Two conditions must be met simultaneously:
 
-  1. SPREAD — the Euclidean distance between the two wrists must be large
-     relative to the Euclidean distance between the shoulders:
+  1. SPREAD — how far the wrists have opened beyond shoulder width, normalised
+     by the total arm length (shoulder→elbow→wrist path on each side):
 
-         open_ratio = euclidean(L_WRIST, R_WRIST) / euclidean(L_SHOULDER, R_SHOULDER)
+         arm_len_l   = dist(L_SHOULDER, L_ELBOW) + dist(L_ELBOW, L_WRIST)
+         arm_len_r   = dist(R_SHOULDER, R_ELBOW) + dist(R_ELBOW, R_WRIST)
+         open_ratio  = (dist(L_WRIST, R_WRIST) - dist(L_SHOULDER, R_SHOULDER))
+                       / (arm_len_l + arm_len_r)
 
-     Using Euclidean (not just X) for both distances means the ratio is
-     stable regardless of the arm angle (horizontal, diagonal, etc.) and
-     compensates for slight camera rotations.
+     Interpretation:
+       0.0  → wrists at the same distance as shoulders (arms at sides)
+       1.0  → arms fully horizontal (maximum possible spread)
+       0.5  → arms open to roughly 45 ° from vertical
 
-     At rest (arms hanging): wrists are roughly hip-width apart, ratio ≈ 1.0–1.3
-     Arms open:              wrists spread wide,                  ratio ≈ 2.0+
-
-  2. HEIGHT — both wrists must be at or above their respective elbows
-     (wrist.y ≤ elbow.y in image coords where y increases downward).
-     This prevents the spread condition from triggering when arms simply
-     hang at the sides (where wrists are below elbows).
-
-  3. FACING GATE — same shoulder/torso ratio used in crossed_arms:
+  2. FACING GATE — same shoulder/torso ratio used in crossed_arms:
      suppresses detection when the subject is turned sideways or away.
 
 Configurable thresholds (config/thresholds.json → "open_arms")
 ---------------------------------------------------------------
-min_open_ratio            (float, default 1.8)
-    Minimum wrist-to-wrist / shoulder-to-shoulder Euclidean ratio.
+min_open_ratio            (float, default 0.50)
+    Minimum (wrist_dist - shoulder_dist) / total_arm_len ratio.
+    0.5 ≈ arms open to ~45 ° from vertical.
 
 min_shoulder_torso_ratio  (float, default 0.40)
     Minimum shoulder_x_span / torso_height — facing-camera gate.
@@ -46,12 +43,12 @@ from gestures.base_gesture import BaseGesture
 
 _L_SHOULDER = 11
 _R_SHOULDER = 12
+_L_ELBOW    = 13
+_R_ELBOW    = 14
 _L_WRIST    = 15
 _R_WRIST    = 16
 _L_HIP      = 23
 _R_HIP      = 24
-
-_REQUIRED = [_L_SHOULDER, _R_SHOULDER, _L_WRIST, _R_WRIST]
 
 
 def _dist(a, b) -> float:
@@ -72,30 +69,34 @@ class OpenArms(BaseGesture):
         try:
             lw = pose[_L_WRIST];    rw = pose[_R_WRIST]
             ls = pose[_L_SHOULDER]; rs = pose[_R_SHOULDER]
+            le = pose[_L_ELBOW];    re = pose[_R_ELBOW]
             lh = pose[_L_HIP];      rh = pose[_R_HIP]
         except (IndexError, AttributeError):
             return False
 
-        # ---- always compute metrics (only needs shoulders + wrists) -
+        # ---- always compute metrics ----------------------------------
         shoulder_dist = _dist(ls, rs)
-        open_ratio    = _dist(lw, rw) / shoulder_dist if shoulder_dist > 0 else 0.0
+        wrist_dist    = _dist(lw, rw)
+        arm_len_l     = _dist(ls, le) + _dist(le, lw)
+        arm_len_r     = _dist(rs, re) + _dist(re, rw)
+        total_arm_len = arm_len_l + arm_len_r
+        open_ratio    = (wrist_dist - shoulder_dist) / total_arm_len if total_arm_len > 0 else 0.0
         self._last_metrics = {"shoulder_dist": shoulder_dist, "open_ratio": open_ratio}
 
         # ---- facing-camera gate (skipped when hips not visible) -----
-        shoulder_x_dist = ls.x - rs.x
         if pose[_L_HIP].visibility >= 0.3 and pose[_R_HIP].visibility >= 0.3:
             shoulder_y = (ls.y + rs.y) / 2.0
             torso_h    = (lh.y + rh.y) / 2.0 - shoulder_y
             if torso_h > 0:
-                min_facing = self.thresholds.get("min_shoulder_torso_ratio", 0.40)
-                if shoulder_x_dist / torso_h < min_facing:
+                min_facing = self.thresholds.get("min_shoulder_torso_ratio", 0.25)
+                if (ls.x - rs.x) / torso_h < min_facing:
                     return False
 
-        # ---- spread gate: wrist distance / shoulder distance --------
-        if shoulder_dist <= 0:
+        # ---- spread gate --------------------------------------------
+        if total_arm_len <= 0:
             return False
 
-        threshold = self.thresholds.get("min_open_ratio", 1.8)
+        threshold = self.thresholds.get("min_open_ratio", 0.50)
         return open_ratio >= threshold
 
     @property

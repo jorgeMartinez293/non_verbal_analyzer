@@ -53,6 +53,10 @@ def _px(lm, w: int, h: int) -> tuple[int, int]:
     return int(lm.x * w), int(lm.y * h)
 
 
+def _dist_lm(a, b) -> float:
+    return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
+
+
 # -----------------------------------------------------------------------
 def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
          gesture_states: dict | None = None) -> np.ndarray:
@@ -97,13 +101,17 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
         cv2.line(frame, _px(lm[f"{side}_ELBOW"],    w, h),
                         _px(lm[f"{side}_WRIST"],    w, h), _COL_BONE, 2)
 
-    # ---- crossing ratios (new scale-invariant metric) ----------------
-    shoulder_dist = lm["L_SHOULDER"].x - lm["R_SHOULDER"].x  # >0 facing cam
-    cross_thresh  = crossed_cfg.get("wrist_cross_ratio", 0.50)
+    # ---- crossing ratios (arm-length normalised) ---------------------
+    cross_thresh = crossed_cfg.get("wrist_cross_ratio", 0.40)
 
-    if shoulder_dist > 0:
-        right_ratio = (lm["R_WRIST"].x - lm["R_SHOULDER"].x) / shoulder_dist
-        left_ratio  = (lm["L_SHOULDER"].x - lm["L_WRIST"].x) / shoulder_dist
+    arm_len_r = (_dist_lm(lm["R_SHOULDER"], lm["R_ELBOW"]) +
+                 _dist_lm(lm["R_ELBOW"],    lm["R_WRIST"]))
+    arm_len_l = (_dist_lm(lm["L_SHOULDER"], lm["L_ELBOW"]) +
+                 _dist_lm(lm["L_ELBOW"],    lm["L_WRIST"]))
+
+    if arm_len_r > 0 and arm_len_l > 0:
+        right_ratio = (lm["R_WRIST"].x - lm["R_SHOULDER"].x) / arm_len_r
+        left_ratio  = (lm["L_SHOULDER"].x - lm["L_WRIST"].x) / arm_len_l
     else:
         right_ratio = left_ratio = 0.0
 

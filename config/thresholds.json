@@ -1,4 +1,8 @@
 {
+  "stability": {
+    "max_landmark_velocity": 0.05,
+    "stability_streak_min": 5
+  },
   "clip": {
     "frames_before": 10,
     "frames_after": 10
@@ -6,7 +10,7 @@
   "crossed_arms": {
     "min_landmark_visibility": 0.3,
     "min_shoulder_torso_ratio": 0.40,
-    "wrist_cross_ratio": 0.50,
+    "wrist_cross_ratio": 0.40,
     "wrist_height_min_ratio": 0.0,
     "wrist_height_max_ratio": 1.1,
     "confirmation_window": 10,
@@ -14,7 +18,7 @@
     "cooldown_frames": 50
   },
   "open_arms": {
-    "min_open_ratio": 2.5,
+    "min_open_ratio": 0.4,
     "min_shoulder_torso_ratio": 0.25,
     "min_landmark_visibility": 0.5,
     "confirmation_window": 10,

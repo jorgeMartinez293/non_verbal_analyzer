@@ -17,6 +17,7 @@ Two operating modes selected at construction time:
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,6 +60,53 @@ class VideoProcessor:
         self._face_lm = None  # set by _build_landmarkers()
         self._hand_lm = None  # set by _build_landmarkers()
         self._last_face_lms = None   # cache for debug inset continuity
+
+        # Landmark stability gate state (reset each process() call)
+        self._prev_pose        = None
+        self._stability_streak = 0
+
+    # ------------------------------------------------------------------
+    # Pose landmark indices used for stability measurement
+    _STABILITY_IDX = [11, 12, 23, 24]  # L_SHOULDER, R_SHOULDER, L_HIP, R_HIP
+
+    def _is_tracking_stable(self, landmarks: dict) -> bool:
+        """Return True only when key pose landmarks have been moving slowly
+        for at least `stability_streak_min` consecutive frames.
+
+        On the first frame after tracking is acquired (or reacquired), the
+        landmarks can jump wildly — this gate prevents those noisy positions
+        from accumulating in the gesture confirmation windows.
+        """
+        cfg       = self.config.get("stability", {})
+        max_vel   = cfg.get("max_landmark_velocity", 0.05)
+        min_streak = cfg.get("stability_streak_min", 5)
+
+        pose = landmarks.get("pose")
+
+        if pose is None or self._prev_pose is None:
+            self._prev_pose        = pose
+            self._stability_streak = 0
+            return False
+
+        try:
+            max_v = max(
+                math.sqrt((pose[i].x - self._prev_pose[i].x) ** 2 +
+                          (pose[i].y - self._prev_pose[i].y) ** 2)
+                for i in self._STABILITY_IDX
+            )
+        except (IndexError, AttributeError):
+            self._prev_pose        = pose
+            self._stability_streak = 0
+            return False
+
+        self._prev_pose = pose
+
+        if max_v > max_vel:
+            self._stability_streak = 0
+            return False
+
+        self._stability_streak += 1
+        return self._stability_streak >= min_streak
 
     # ------------------------------------------------------------------
     def _build_landmarkers(self):
@@ -135,6 +183,10 @@ class VideoProcessor:
 
         self._build_landmarkers()
 
+        # Reset stability gate for this video
+        self._prev_pose        = None
+        self._stability_streak = 0
+
         alert_states: dict[str, int] = {g.name: 0 for g in self.gesture_manager.gestures}
 
         try:
@@ -152,7 +204,11 @@ class VideoProcessor:
                     self.clip_saver.add_post_frame(frame)
 
                 # ---- gesture detection (updates internal state) ------
-                triggered = self.gesture_manager.process_frame(landmarks)
+                if self._is_tracking_stable(landmarks):
+                    triggered = self.gesture_manager.process_frame(landmarks)
+                else:
+                    self.gesture_manager.reset_windows()
+                    triggered = []
 
                 for name in triggered:
                     print(f"[VideoProcessor] ✓ '{name}' at frame {frame_idx}")
