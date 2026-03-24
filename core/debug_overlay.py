@@ -142,15 +142,18 @@ def _update_and_draw_graphs(
     thresholds: dict,
     landmarks: dict,
 ) -> None:
-    """Update rolling metric history and render 7 mini time-series graphs."""
+    """Update rolling metric history and render mini time-series graphs."""
     ca_state  = (gesture_states or {}).get("crossed_arms", {})
     oa_state  = (gesture_states or {}).get("open_arms", {})
     re_state  = (gesture_states or {}).get("raised_eyebrows", {})
+    bf_state  = (gesture_states or {}).get("blink_frequency", {})
 
     cross_thr = thresholds.get("crossed_arms", {}).get("wrist_cross_ratio", 0.50)
     open_thr  = thresholds.get("open_arms", {}).get("min_open_ratio", 2.0)
     calib     = re_state.get("calibrating", False)
     brow_thr  = re_state.get("personalized_thr") if not calib else None
+
+    ear_thr   = thresholds.get("blink_frequency", {}).get("ear_threshold", 0.20)
 
     shoulder_eu = oa_state.get("shoulder_dist")
     if shoulder_eu is None:
@@ -178,6 +181,9 @@ def _update_and_draw_graphs(
         ("iris",  inter_iris,                  None,      True,  False),
         ("rb-ri", re_state.get("ratio_r"),     brow_thr,  False, calib),
         ("lb-li", re_state.get("ratio_l"),     brow_thr,  False, calib),
+        ("ear-r", bf_state.get("ear_r"),       ear_thr,   False, False),
+        ("ear-l", bf_state.get("ear_l"),       ear_thr,   False, False),
+        ("bpm",   bf_state.get("blink_rate"),  None,      True,  False),
     ]
 
     for key, val, *_ in specs:
@@ -201,7 +207,7 @@ def _update_and_draw_graphs(
     bar_gap  = 5
     bar_w    = (panel_w - bar_gap * (n_gest - 1)) // max(n_gest, 1)
     bar_h    = 40
-    bar_y    = 7 * _ROW_H + bar_gap                # just below the 7th graph
+    bar_y    = 10 * _ROW_H + bar_gap               # just below the 10th graph
 
     for i, (g_name, g_state) in enumerate(gesture_states.items()):
         bx = i * (bar_w + bar_gap)
@@ -240,7 +246,7 @@ def _update_and_draw_graphs(
         cv2.line(frame, (thr_x, by), (thr_x, by + bar_h), (255, 255, 255), 1)
 
         # label
-        short = {"crossed_arms": "ca", "open_arms": "oa", "raised_eyebrows": "re"}.get(g_name) or g_name[:2]
+        short = {"crossed_arms": "ca", "open_arms": "oa", "raised_eyebrows": "re", "blink_frequency": "bf"}.get(g_name) or g_name[:2]
         cv2.putText(frame, short, (bx + 3, by + bar_h - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
 
