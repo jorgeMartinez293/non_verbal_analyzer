@@ -1,6 +1,6 @@
 {
   "stability": {
-    "max_landmark_velocity": 0.05,
+    "max_landmark_velocity": 0.08,
     "stability_streak_min": 5
   },
   "clip": {
