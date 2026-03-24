@@ -67,11 +67,25 @@ class CrossedArms(BaseGesture):
 
     def __init__(self, thresholds: dict):
         super().__init__("crossed_arms", thresholds)
+        self._last_metrics: dict = {}
 
     def detect(self, landmarks: dict) -> bool:
         pose = landmarks.get("pose")
         if pose is None:
             return False
+
+        # ---- always compute metrics (only needs shoulders + wrists) -
+        try:
+            _ls = pose[_L_SHOULDER]; _rs = pose[_R_SHOULDER]
+            _lw = pose[_L_WRIST];    _rw = pose[_R_WRIST]
+            _sd = _ls.x - _rs.x
+            if _sd > 0:
+                self._last_metrics = {
+                    "right_ratio": (_rw.x - _rs.x) / _sd,
+                    "left_ratio":  (_ls.x - _lw.x) / _sd,
+                }
+        except (IndexError, AttributeError):
+            pass
 
         # ---- visibility gate ----------------------------------------
         min_vis = self.thresholds.get("min_landmark_visibility", 0.5)
@@ -120,3 +134,9 @@ class CrossedArms(BaseGesture):
                 return False
 
         return True
+
+    @property
+    def state(self) -> dict:
+        s = super().state
+        s.update(self._last_metrics)
+        return s

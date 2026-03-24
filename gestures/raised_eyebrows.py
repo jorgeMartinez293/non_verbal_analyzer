@@ -70,6 +70,7 @@ class RaisedEyebrows(BaseGesture):
         self._calib_stable_streak = 0
         self._personalized_thr    = thresholds.get("eyebrow_raise_ratio", 0.45)
         self._baseline            = None
+        self._last_metrics: dict  = {}
 
     # ------------------------------------------------------------------
     def update(self, landmarks: dict) -> bool:
@@ -97,6 +98,7 @@ class RaisedEyebrows(BaseGesture):
         brow_y_left  = statistics.mean(face[i].y for i in _L_BROW_TOP)
         ratio_right  = (face[_R_IRIS].y - brow_y_right) / inter_iris
         ratio_left   = (face[_L_IRIS].y - brow_y_left)  / inter_iris
+        self._last_metrics = {"inter_iris": inter_iris, "ratio_r": ratio_right, "ratio_l": ratio_left}
 
         return ratio_right >= self._personalized_thr and ratio_left >= self._personalized_thr
 
@@ -109,6 +111,7 @@ class RaisedEyebrows(BaseGesture):
         s["calib_target"]     = self.thresholds.get("calibration_min_samples", 500)
         s["baseline"]         = self._baseline
         s["personalized_thr"] = self._personalized_thr
+        s.update(self._last_metrics)
         return s
 
     # ------------------------------------------------------------------
@@ -129,6 +132,7 @@ class RaisedEyebrows(BaseGesture):
         brow_y_left  = statistics.mean(face[i].y for i in _L_BROW_TOP)
         ratio_r = (face[_R_IRIS].y - brow_y_right) / inter_iris
         ratio_l = (face[_L_IRIS].y - brow_y_left)  / inter_iris
+        self._last_metrics = {"inter_iris": inter_iris, "ratio_r": ratio_r, "ratio_l": ratio_l}
 
         # Plausibility gate — camera-distance invariant
         if not (_RATIO_MIN <= ratio_r <= _RATIO_MAX and

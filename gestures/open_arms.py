@@ -62,6 +62,7 @@ class OpenArms(BaseGesture):
 
     def __init__(self, thresholds: dict):
         super().__init__("open_arms", thresholds)
+        self._last_metrics: dict = {}
 
     def detect(self, landmarks: dict) -> bool:
         pose = landmarks.get("pose")
@@ -75,6 +76,11 @@ class OpenArms(BaseGesture):
         except (IndexError, AttributeError):
             return False
 
+        # ---- always compute metrics (only needs shoulders + wrists) -
+        shoulder_dist = _dist(ls, rs)
+        open_ratio    = _dist(lw, rw) / shoulder_dist if shoulder_dist > 0 else 0.0
+        self._last_metrics = {"shoulder_dist": shoulder_dist, "open_ratio": open_ratio}
+
         # ---- facing-camera gate (skipped when hips not visible) -----
         shoulder_x_dist = ls.x - rs.x
         if pose[_L_HIP].visibility >= 0.3 and pose[_R_HIP].visibility >= 0.3:
@@ -86,10 +92,14 @@ class OpenArms(BaseGesture):
                     return False
 
         # ---- spread gate: wrist distance / shoulder distance --------
-        shoulder_dist = _dist(ls, rs)
         if shoulder_dist <= 0:
             return False
 
-        open_ratio = _dist(lw, rw) / shoulder_dist
-        threshold  = self.thresholds.get("min_open_ratio", 1.8)
+        threshold = self.thresholds.get("min_open_ratio", 1.8)
         return open_ratio >= threshold
+
+    @property
+    def state(self) -> dict:
+        s = super().state
+        s.update(self._last_metrics)
+        return s

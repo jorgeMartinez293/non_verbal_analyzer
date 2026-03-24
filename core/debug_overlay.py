@@ -19,7 +19,17 @@ from __future__ import annotations
 import cv2
 import math
 import numpy as np
-import statistics
+from collections import deque
+
+# ---- Rolling history for temporal graphs --------------------------------
+_HISTORY_LEN = 200
+_GRAPH_W     = 130   # width of graph plot area
+_GRAPH_H     = 35    # height of graph plot area
+_GRAPH_GAP   = 4     # vertical gap between graphs
+_LABEL_H     = 12    # height of label row above each graph
+_VAL_W       = 75    # extra width to the right for current-value text
+_history: dict[str, deque] = {}
+_scale:   dict[str, float] = {}   # hi per metric — fixed at thr*1.3; expands up for refs
 
 # MediaPipe Pose landmark indices used by CrossedArms
 _IDX = {
@@ -121,150 +131,224 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
         cv2.circle(frame, _px(lm[name], w, h), 6, col,           -1)
         cv2.circle(frame, _px(lm[name], w, h), 6, (255, 255, 255), 1)
 
-    # ---- HUD values --------------------------------------------------
-    shoulder_eu  = math.sqrt((lm["L_SHOULDER"].x - lm["R_SHOULDER"].x) ** 2 +
-                             (lm["L_SHOULDER"].y - lm["R_SHOULDER"].y) ** 2)
-    wrist_eu     = math.sqrt((lm["L_WRIST"].x - lm["R_WRIST"].x) ** 2 +
-                             (lm["L_WRIST"].y - lm["R_WRIST"].y) ** 2)
-    open_ratio   = wrist_eu / shoulder_eu if shoulder_eu > 0 else 0.0
-    open_thresh  = thresholds.get("open_arms", {}).get("min_open_ratio", 2.0)
+    _update_and_draw_graphs(frame, gesture_states, thresholds, landmarks)
+    return frame
 
-    hud_lines = [
-        (f"ls-rs: {shoulder_eu:.3f}",
-         (200, 200, 200)),
-        (f"rw-ls: {right_ratio:.2f}  (>= {cross_thresh:.2f})",
-         (0, 220, 0) if right_ok else (0, 80, 220)),
-        (f"lw-rs: {left_ratio:.2f}  (>= {cross_thresh:.2f})",
-         (0, 220, 0) if left_ok else (0, 80, 220)),
-        (f"lw-rw: {open_ratio:.2f}  (>= {open_thresh:.2f})",
-         (0, 220, 0) if open_ratio >= open_thresh else (0, 80, 220)),
+
+# -----------------------------------------------------------------------
+def _update_and_draw_graphs(
+    frame: np.ndarray,
+    gesture_states: dict | None,
+    thresholds: dict,
+    landmarks: dict,
+) -> None:
+    """Update rolling metric history and render 7 mini time-series graphs."""
+    ca_state  = (gesture_states or {}).get("crossed_arms", {})
+    oa_state  = (gesture_states or {}).get("open_arms", {})
+    re_state  = (gesture_states or {}).get("raised_eyebrows", {})
+
+    cross_thr = thresholds.get("crossed_arms", {}).get("wrist_cross_ratio", 0.50)
+    open_thr  = thresholds.get("open_arms", {}).get("min_open_ratio", 2.0)
+    calib     = re_state.get("calibrating", False)
+    brow_thr  = re_state.get("personalized_thr") if not calib else None
+
+    shoulder_eu = oa_state.get("shoulder_dist")
+    if shoulder_eu is None:
+        pose = landmarks.get("pose")
+        if pose:
+            try:
+                ls = pose[11]; rs = pose[12]
+                shoulder_eu = math.sqrt((ls.x - rs.x) ** 2 + (ls.y - rs.y) ** 2)
+            except (IndexError, AttributeError):
+                pass
+
+    inter_iris = re_state.get("inter_iris")
+    if inter_iris is None:
+        face = landmarks.get("face")
+        if face and len(face) > 473:
+            v = abs(face[468].x - face[473].x)
+            inter_iris = v if v > 0 else None
+
+    # (key, value, threshold, is_ref, calibrating)
+    specs = [
+        ("ls-rs", shoulder_eu,                None,      True,  False),
+        ("rw-ls", ca_state.get("right_ratio"), cross_thr, False, False),
+        ("lw-rs", ca_state.get("left_ratio"),  cross_thr, False, False),
+        ("lw-rw", oa_state.get("open_ratio"),  open_thr,  False, False),
+        ("iris",  inter_iris,                  None,      True,  False),
+        ("rb-ri", re_state.get("ratio_r"),     brow_thr,  False, calib),
+        ("lb-li", re_state.get("ratio_l"),     brow_thr,  False, calib),
     ]
 
-    # ---- eyebrow ratios (from face landmarks) -----------------------
-    face        = landmarks.get("face")
-    re_state    = (gesture_states or {}).get("raised_eyebrows", {})
-    brow_thresh = (re_state.get("personalized_thr")
-                   or thresholds.get("raised_eyebrows", {}).get("eyebrow_raise_ratio", 0.45))
-    if face and len(face) > 473:
-        inter_iris = abs(face[468].x - face[473].x)
-        if inter_iris > 0:
-            r_brow = statistics.mean(face[i].y for i in [70, 63, 105, 66, 107])
-            l_brow = statistics.mean(face[i].y for i in [300, 293, 334, 296, 336])
-            ratio_r = (face[468].y - r_brow) / inter_iris
-            ratio_l = (face[473].y - l_brow) / inter_iris
-            hud_lines.append((f"iris: {inter_iris:.3f}",
-                               (200, 200, 200)))
-            hud_lines.append((f"rb-ri: {ratio_r:.2f}  (>= {brow_thresh:.2f})",
-                               (0, 220, 0) if ratio_r >= brow_thresh else (0, 80, 220)))
-            hud_lines.append((f"lb-li: {ratio_l:.2f}  (>= {brow_thresh:.2f})",
-                               (0, 220, 0) if ratio_l >= brow_thresh else (0, 80, 220)))
+    for key, val, *_ in specs:
+        if key not in _history:
+            _history[key] = deque(maxlen=_HISTORY_LEN)
+        if val is not None:
+            _history[key].append(float(val))
+
+    y = 0
+    for key, _val, thr, is_ref, is_calib in specs:
+        buf = _history.get(key, deque())
+        _draw_one_graph(frame, 0, y, key, buf, thr, is_ref, is_calib)
+        y += _LABEL_H + _GRAPH_H + _GRAPH_GAP
+
+    # ---- horizontal confirmation bars below the 7 graphs ------------
+    if not gesture_states:
+        return
+    _ROW_H   = _LABEL_H + _GRAPH_H + _GRAPH_GAP   # 51px
+    panel_w  = _GRAPH_W + _VAL_W                   # 205px
+    n_gest   = len(gesture_states)
+    bar_gap  = 5
+    bar_w    = (panel_w - bar_gap * (n_gest - 1)) // max(n_gest, 1)
+    bar_h    = 40
+    bar_y    = 7 * _ROW_H + bar_gap                # just below the 7th graph
+
+    for i, (g_name, g_state) in enumerate(gesture_states.items()):
+        bx = i * (bar_w + bar_gap)
+        by = bar_y
+
+        # background
+        ov = frame.copy()
+        cv2.rectangle(ov, (bx, by), (bx + bar_w, by + bar_h), (0, 0, 0), -1)
+        cv2.addWeighted(ov, 0.55, frame, 0.45, 0, frame)
+
+        required     = g_state.get("required_ratio", 0.70)
+        calib        = g_state.get("calibrating", False)
+        cooldown_rem = g_state.get("cooldown_remaining", 0)
+        cooldown_tot = max(1, thresholds.get(g_name, {}).get("cooldown_frames", 50))
+
+        if cooldown_rem > 0:
+            # drain slowly as cooldown expires
+            fill_ratio = cooldown_rem / cooldown_tot
+            col        = (0, 140, 0)
+        elif calib:
+            calib_n   = g_state.get("calib_samples", 0)
+            calib_tot = max(1, g_state.get("calib_target", 200))
+            fill_ratio = calib_n / calib_tot
+            col        = (200, 200, 200)
         else:
-            hud_lines += [("iris: no iris", (100, 100, 100)),
-                          ("rb-ri: no iris", (100, 100, 100)),
-                          ("lb-li: no iris", (100, 100, 100))]
+            fill_ratio = g_state.get("ratio", 0.0)
+            col        = (0, 200, 0)
+
+        fill_w = int(fill_ratio * bar_w)
+        if fill_w > 0:
+            cv2.rectangle(frame, (bx, by), (bx + fill_w, by + bar_h), col, -1)
+
+        # white threshold marker
+        thr_x = bx + int(required * bar_w)
+        thr_x = max(bx, min(bx + bar_w - 1, thr_x))
+        cv2.line(frame, (thr_x, by), (thr_x, by + bar_h), (255, 255, 255), 1)
+
+        # label
+        short = {"crossed_arms": "ca", "open_arms": "oa", "raised_eyebrows": "re"}.get(g_name) or g_name[:2]
+        cv2.putText(frame, short, (bx + 3, by + bar_h - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+
+
+# -----------------------------------------------------------------------
+def _draw_one_graph(
+    frame: np.ndarray,
+    x0: int, y0: int,
+    label: str,
+    buf,               # deque[float]
+    threshold,         # float | None
+    is_ref: bool,
+    calibrating: bool,
+) -> None:
+    total_w = _GRAPH_W + _VAL_W
+    total_h = _LABEL_H + _GRAPH_H
+
+    # semi-transparent dark background
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + total_w, y0 + total_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+
+    # label
+    cv2.putText(frame, label, (x0 + 3, y0 + _LABEL_H - 2),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (160, 160, 160), 1, cv2.LINE_AA)
+
+    if not buf:
+        return
+
+    y_vals  = list(buf)
+    current = y_vals[-1]
+    n       = len(y_vals)
+
+    # y-range: lo always 0 (graph clips below); hi fixed at thr*1.3 for gesture
+    # metrics, or expands up for reference metrics. Numeric text is unclamped.
+    if threshold is not None:
+        _scale[label] = threshold * 1.3
+    elif label not in _scale:
+        _scale[label] = max(current, 1e-4)
     else:
-        hud_lines += [("iris: no face", (100, 100, 100)),
-                      ("rb-ri: no face", (100, 100, 100)),
-                      ("lb-li: no face", (100, 100, 100))]
-    _put_hud(frame, hud_lines, w, h, y_offset=0)
-    return frame
+        _scale[label] = max(_scale[label], current)
+    lo = 0.0
+    hi = max(_scale[label], 1e-4)
+
+    def _to_py(v: float) -> int:
+        t = max(0.0, min(1.0, (v - lo) / (hi - lo)))
+        return y0 + _LABEL_H + _GRAPH_H - int(t * _GRAPH_H)
+
+    # line color
+    if calibrating:
+        color = (255, 255, 255)
+    elif is_ref:
+        t = max(0.0, min(1.0, (current - lo) / (hi - lo)))
+        color = (0, int(80 + 140 * t), int(220 * (1 - t)))
+    else:
+        color = (0, 220, 0) if (threshold is not None and current >= threshold) else (0, 80, 220)
+
+    # polyline
+    pts = np.array(
+        [[x0 + int(i / max(n - 1, 1) * (_GRAPH_W - 1)), _to_py(v)]
+         for i, v in enumerate(y_vals)],
+        dtype=np.int32,
+    ).reshape(-1, 1, 2)
+    cv2.polylines(frame, [pts], False, color, 1, cv2.LINE_AA)
+
+    # dashed threshold line
+    if threshold is not None and not calibrating:
+        y_thr = max(y0 + _LABEL_H, min(y0 + _LABEL_H + _GRAPH_H, _to_py(threshold)))
+        dash  = 5
+        for xd in range(x0, x0 + _GRAPH_W, dash * 2):
+            cv2.line(frame, (xd, y_thr), (min(xd + dash, x0 + _GRAPH_W), y_thr),
+                     (180, 180, 60), 1)
+
+    # current value / threshold
+    val_text = (f"{current:.2f}/{threshold:.2f}" if threshold is not None
+                else f"{current:.2f}")
+    cv2.putText(frame, val_text,
+                (x0 + _GRAPH_W + 3, y0 + _LABEL_H + _GRAPH_H - 3),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA)
 
 
 # -----------------------------------------------------------------------
 def draw_gesture_state(
     frame:          np.ndarray,
-    gesture_states: dict,          # {name: {active_frames, cooldown_remaining, ...}}
-    alert_states:   dict,          # {name: frames_remaining}  for DETECTED banner
-    thresholds:     dict,          # full config dict (not just crossed_arms sub-dict)
+    gesture_states: dict,
+    alert_states:   dict,
+    thresholds:     dict,
 ) -> np.ndarray:
-    """
-    Draws the gesture status panel at the bottom of the frame:
-      • Yellow progress bar — confirmation frames accumulating
-      • Blue bar           — cooldown countdown
-      • Green flashing banner — "DETECTED" for ~1 second after trigger
-    """
+    """Draws the DETECTED banner at the bottom when a gesture fires."""
     h, w = frame.shape[:2]
     font       = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = max(0.45, w / 1400)
-    thickness  = 1
-    bar_h      = 18
     pad        = 6
-    panel_x    = 0
+    y_cursor   = h
 
-    y_cursor = h  # build upwards from the bottom
-
-    for gesture_name, state in gesture_states.items():
-        cfg          = thresholds.get(gesture_name, {})
-        cooldown_tot = cfg.get("cooldown_frames", 300)
-        cooldown_rem = state["cooldown_remaining"]
-        alert_rem    = alert_states.get(gesture_name, 0)
-
-        # ---- DETECTED banner ----------------------------------------
+    for gesture_name in gesture_states:
+        alert_rem = alert_states.get(gesture_name, 0)
         if alert_rem > 0:
-            alpha   = min(1.0, alert_rem / 15)           # fade out
+            alpha    = min(1.0, alert_rem / 15)
             banner_h = int(44 * font_scale / 0.45)
             y_cursor -= banner_h + pad
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (0, y_cursor), (w, y_cursor + banner_h),
-                          (0, 140, 0), -1)
+            overlay  = frame.copy()
+            cv2.rectangle(overlay, (0, y_cursor), (w, y_cursor + banner_h), (0, 140, 0), -1)
             cv2.addWeighted(overlay, alpha * 0.8, frame, 1 - alpha * 0.8, 0, frame)
-            label = f"DETECTED: {gesture_name.replace('_',' ').upper()}"
+            label = f"DETECTED: {gesture_name.replace('_', ' ').upper()}"
             tw = cv2.getTextSize(label, font, font_scale * 1.4, 2)[0][0]
-            cv2.putText(frame, label,
-                        ((w - tw) // 2, y_cursor + banner_h - pad),
+            cv2.putText(frame, label, ((w - tw) // 2, y_cursor + banner_h - pad),
                         font, font_scale * 1.4, (255, 255, 255), 2, cv2.LINE_AA)
-
-        # ---- Calibration progress bar -------------------------------
-        elif state.get("calibrating"):
-            y_cursor -= bar_h + pad
-            calib_n   = state.get("calib_samples", 0)
-            calib_tot = max(1, state.get("calib_target", 500))
-            ratio     = calib_n / calib_tot
-            filled    = int(w * ratio)
-            overlay   = frame.copy()
-            cv2.rectangle(overlay, (0, y_cursor), (w, y_cursor + bar_h), (30, 30, 80), -1)
-            cv2.rectangle(overlay, (0, y_cursor), (filled, y_cursor + bar_h), (200, 180, 0), -1)
-            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-            label = f"{gesture_name.replace('_', ' ')}  calibrating {calib_n}/{calib_tot}"
-            cv2.putText(frame, label, (pad, y_cursor + bar_h - 4),
-                        font, font_scale, (220, 210, 80), thickness, cv2.LINE_AA)
-
-        # ---- Cooldown bar -------------------------------------------
-        elif cooldown_rem > 0:
-            y_cursor -= bar_h + pad
-            ratio = cooldown_rem / cooldown_tot
-            filled = int(w * ratio)
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (0, y_cursor), (w, y_cursor + bar_h), (80, 60, 0), -1)
-            cv2.rectangle(overlay, (0, y_cursor), (filled, y_cursor + bar_h), (200, 120, 0), -1)
-            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-            label = f"cooldown  {cooldown_rem} frames"
-            cv2.putText(frame, label, (pad, y_cursor + bar_h - 4),
-                        font, font_scale, (220, 180, 80), thickness, cv2.LINE_AA)
-
-        # ---- Confirmation progress bar ------------------------------
-        else:
-            y_cursor -= bar_h + pad
-            ratio        = state.get("ratio", 0.0)
-            required     = state.get("required_ratio", 0.70)
-            positive     = state.get("positive_frames", 0)
-            window_total = state.get("window_total", 0)
-            window_size  = state.get("window_size", 20)
-            bar_fill     = int(w * ratio)
-            threshold_x  = int(w * required)
-            col_bar      = (0, 200, 200) if ratio >= required else (0, 130, 200)
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (0, y_cursor), (w, y_cursor + bar_h), (30, 30, 0), -1)
-            cv2.rectangle(overlay, (0, y_cursor), (bar_fill, y_cursor + bar_h), col_bar, -1)
-            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-            # threshold marker
-            cv2.line(frame, (threshold_x, y_cursor), (threshold_x, y_cursor + bar_h),
-                     (255, 255, 255), 1)
-            label = (f"{gesture_name.replace('_',' ')}  "
-                     f"{positive}/{window_total} frames  "
-                     f"({ratio*100:.0f}% / need {required*100:.0f}%)")
-            cv2.putText(frame, label, (pad, y_cursor + bar_h - 4),
-                        font, font_scale, (200, 230, 230), thickness, cv2.LINE_AA)
 
     return frame
 
@@ -359,37 +443,3 @@ def draw_face_inset(
         frame[y_off: y_off + inset_h, x_off: x_off + inset_w] = inset
 
     return frame
-
-
-# -----------------------------------------------------------------------
-def _put_hud(
-    frame: np.ndarray,
-    lines: list,
-    w: int,
-    h: int,
-    y_offset: int = 0,
-) -> None:
-    font       = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = max(0.4, w / 1600)
-    thickness  = 1
-    pad        = 6
-    line_h     = int(18 * font_scale / 0.4)
-
-    max_tw = max(
-        cv2.getTextSize(l if isinstance(l, str) else l[0],
-                        font, font_scale, thickness)[0][0]
-        for l in lines
-    )
-    box_w = max_tw + pad * 2
-    box_h = line_h * len(lines) + pad * 2
-
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (0, y_offset), (box_w, y_offset + box_h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
-
-    for i, line in enumerate(lines):
-        text  = line if isinstance(line, str) else line[0]
-        color = (200, 200, 200) if isinstance(line, str) else line[1]
-        y     = y_offset + pad + (i + 1) * line_h
-        cv2.putText(frame, text, (pad, y), font, font_scale,
-                    color, thickness, cv2.LINE_AA)
