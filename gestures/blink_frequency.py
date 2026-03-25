@@ -141,9 +141,11 @@ class BlinkFrequency(BaseGesture):
         ear_r = _ear(face, *_R_EYE)
         ear_l = _ear(face, *_L_EYE)
 
-        # Skip frame if tracking has collapsed (landmark positions invalid)
+        # Skip frame if tracking has collapsed (landmark positions invalid).
+        # Do NOT reset _in_blink here: a hard blink can legitimately drop the EAR
+        # below detect_min. Only a full face loss (handled above) should abort a
+        # blink in progress.
         if ear_r < detect_min or ear_l < detect_min:
-            self._in_blink = False
             return
 
         # Frame is valid: advance the visible-frame counter

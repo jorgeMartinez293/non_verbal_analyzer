@@ -27,7 +27,7 @@
   },
   "raised_eyebrows": {
     "eyebrow_raise_ratio": 0.55,
-    "eyebrow_raise_delta": 0.10,
+    "eyebrow_raise_delta": 0.15,
     "min_inter_iris_dist": 0.06,
     "calibration_min_samples": 200,
     "calibration_percentile": 10,
@@ -47,5 +47,13 @@
     "confirmation_window": 8,
     "confirmation_ratio": 0.70,
     "cooldown_frames": 2
+  },
+  "touch_face": {
+    "hand_face_ratio": 0.35,
+    "min_arm_ratio": 0.5,
+    "min_landmark_visibility": 0.3,
+    "confirmation_window": 10,
+    "confirmation_ratio": 0.70,
+    "cooldown_frames": 50
   }
 }
