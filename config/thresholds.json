@@ -40,12 +40,12 @@
     "ear_threshold": 0.25,
     "detect_min_ear": 0.10,
     "rate_window_frames": 900,
-    "blink_min_frames": 1,
+    "blink_min_frames": 2,
     "blink_max_frames": 12,
     "fps": 30,
     "max_bpm_display": 40.0,
     "confirmation_window": 8,
     "confirmation_ratio": 0.70,
-    "cooldown_frames": 1
+    "cooldown_frames": 2
   }
 }

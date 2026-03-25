@@ -139,6 +139,40 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
         cv2.circle(frame, _px(lm[name], w, h), 6, col,           -1)
         cv2.circle(frame, _px(lm[name], w, h), 6, (255, 255, 255), 1)
 
+    # ---- touch_face: nose anchor + threshold radius + hand landmarks ---
+    tf_cfg    = thresholds.get("touch_face", thresholds)
+    tf_ratio  = tf_cfg.get("hand_face_ratio", 0.35)
+    nose_lm   = pose[0]
+    nx, ny    = _px(nose_lm, w, h)
+
+    # threshold radius in pixels (ratio * shoulder_dist_px)
+    s_dist_px = int(_dist_lm(lm["L_SHOULDER"], lm["R_SHOULDER"]) * w)
+    radius_px = max(1, int(tf_ratio * s_dist_px))
+
+    # semi-transparent orange circle showing the proximity zone
+    overlay2 = frame.copy()
+    cv2.circle(overlay2, (nx, ny), radius_px, (0, 165, 255), 2)
+    cv2.addWeighted(overlay2, 0.5, frame, 0.5, 0, frame)
+
+    # nose dot
+    cv2.circle(frame, (nx, ny), 6, (0, 200, 255), -1)
+    cv2.circle(frame, (nx, ny), 6, (255, 255, 255), 1)
+
+    # hand landmarks
+    s_dist_norm = _dist_lm(lm["L_SHOULDER"], lm["R_SHOULDER"])
+    for hand_key in ("left_hand", "right_hand"):
+        hand = landmarks.get(hand_key)
+        if hand is None:
+            continue
+        hand_active = any(
+            _dist_lm(lm2, nose_lm) / max(s_dist_norm, 1e-4) < tf_ratio
+            for lm2 in hand
+        )
+        col = (0, 230, 0) if hand_active else (200, 200, 200)
+        for lm2 in hand:
+            px2, py2 = int(lm2.x * w), int(lm2.y * h)
+            cv2.circle(frame, (px2, py2), 4, col, -1)
+
     _update_and_draw_graphs(frame, gesture_states, thresholds, landmarks)
     return frame
 
@@ -155,6 +189,7 @@ def _update_and_draw_graphs(
     oa_state  = (gesture_states or {}).get("open_arms", {})
     re_state  = (gesture_states or {}).get("raised_eyebrows", {})
     bf_state  = (gesture_states or {}).get("blink_frequency", {})
+    tf_state  = (gesture_states or {}).get("touch_face", {})
 
     cross_thr = thresholds.get("crossed_arms", {}).get("wrist_cross_ratio", 0.50)
     open_thr  = thresholds.get("open_arms", {}).get("min_open_ratio", 2.0)
@@ -162,6 +197,7 @@ def _update_and_draw_graphs(
     brow_thr  = re_state.get("personalized_thr") if not calib else None
 
     ear_thr   = thresholds.get("blink_frequency", {}).get("ear_threshold", 0.20)
+    tf_thr    = thresholds.get("touch_face", {}).get("hand_face_ratio", 0.35)
 
     shoulder_eu = oa_state.get("shoulder_dist")
     if shoulder_eu is None:
@@ -192,6 +228,7 @@ def _update_and_draw_graphs(
         ("ear-r", bf_state.get("ear_r"),       ear_thr,   False, False),
         ("ear-l", bf_state.get("ear_l"),       ear_thr,   False, False),
         ("bpm",   bf_state.get("blink_rate"),  None,      True,  False),
+        ("tf-hf", tf_state.get("hand_face_ratio"), tf_thr, False, False),
     ]
 
     for key, val, *_ in specs:
@@ -215,7 +252,7 @@ def _update_and_draw_graphs(
     bar_gap  = 5
     bar_w    = (panel_w - bar_gap * (n_gest - 1)) // max(n_gest, 1)
     bar_h    = 40
-    bar_y    = 10 * _ROW_H + bar_gap               # just below the 10th graph
+    bar_y    = 11 * _ROW_H + bar_gap               # just below the 11th graph
 
     for i, (g_name, g_state) in enumerate(gesture_states.items()):
         bx = i * (bar_w + bar_gap)
@@ -254,7 +291,7 @@ def _update_and_draw_graphs(
         cv2.line(frame, (thr_x, by), (thr_x, by + bar_h), (255, 255, 255), 1)
 
         # label
-        short = {"crossed_arms": "ca", "open_arms": "oa", "raised_eyebrows": "re", "blink_frequency": "bf"}.get(g_name) or g_name[:2]
+        short = {"crossed_arms": "ca", "open_arms": "oa", "raised_eyebrows": "re", "blink_frequency": "bf", "touch_face": "tf"}.get(g_name) or g_name[:2]
         cv2.putText(frame, short, (bx + 3, by + bar_h - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
 
