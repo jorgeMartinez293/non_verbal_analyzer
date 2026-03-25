@@ -251,7 +251,7 @@ def _update_and_draw_graphs(
     # ---- horizontal confirmation bars below the graphs ----------------
     if not gesture_states:
         return
-    _ROW_H    = _LABEL_H + _GRAPH_H + _GRAPH_GAP   # 51px
+    h_frame   = frame.shape[0]
     panel_w   = _GRAPH_W + _VAL_W                   # 205px
     # blink_frequency is metric-only: its progress is shown in the graphs above
     bar_states = {k: v for k, v in gesture_states.items() if k != "blink_frequency"}
@@ -259,7 +259,9 @@ def _update_and_draw_graphs(
     bar_gap   = 5
     bar_w     = (panel_w - bar_gap * (n_gest - 1)) // max(n_gest, 1)
     bar_h     = 40
-    bar_y     = 13 * _ROW_H + bar_gap               # just below the 13th graph
+    bar_y     = min(y + bar_gap, h_frame - bar_h - 2)  # just below last graph, clamped
+    if bar_y < 0:
+        return
 
     for i, (g_name, g_state) in enumerate(bar_states.items()):
         bx = i * (bar_w + bar_gap)
@@ -285,7 +287,9 @@ def _update_and_draw_graphs(
             fill_ratio = calib_n / calib_tot
             col        = (200, 200, 200)
         else:
-            fill_ratio = g_state.get("ratio", 0.0)
+            pos = g_state.get("positive_frames", 0)
+            wsz = max(1, g_state.get("window_size", 1))
+            fill_ratio = pos / wsz
             col        = (0, 200, 0)
 
         fill_w = int(fill_ratio * bar_w)

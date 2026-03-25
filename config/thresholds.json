@@ -55,5 +55,14 @@
     "confirmation_window": 10,
     "confirmation_ratio": 0.70,
     "cooldown_frames": 50
+  },
+  "raised_arms": {
+    "min_raise_margin": 0.05,
+    "require_both_arms": false,
+    "min_shoulder_torso_ratio": 0.30,
+    "min_landmark_visibility": 0.25,
+    "confirmation_window": 6,
+    "confirmation_ratio": 0.70,
+    "cooldown_frames": 50
   }
 }
