@@ -204,7 +204,8 @@ class VideoProcessor:
                     self.clip_saver.add_post_frame(frame)
 
                 # ---- gesture detection (updates internal state) ------
-                if self._is_tracking_stable(landmarks):
+                tracking_stable = self._is_tracking_stable(landmarks)
+                if tracking_stable:
                     triggered = self.gesture_manager.process_frame(landmarks)
                 else:
                     self.gesture_manager.reset_windows()
@@ -242,7 +243,8 @@ class VideoProcessor:
 
                     clean_frame = frame.copy()  # snapshot before any drawing
                     debug_overlay.draw(frame, landmarks, self.config,
-                                       gesture_states=self.gesture_manager.get_states())
+                                       gesture_states=self.gesture_manager.get_states(),
+                                       tracking_stable=tracking_stable)
                     debug_overlay.draw_face_inset(
                         frame, landmarks,
                         cached_face_lms=self._last_face_lms,

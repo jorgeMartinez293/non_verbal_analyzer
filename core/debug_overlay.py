@@ -59,7 +59,7 @@ def _dist_lm(a, b) -> float:
 
 # -----------------------------------------------------------------------
 def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
-         gesture_states: dict | None = None) -> np.ndarray:
+         gesture_states: dict | None = None, tracking_stable: bool = True) -> np.ndarray:
     """Draw the 8 pose keypoints and diagnostic lines onto *frame* (in-place)."""
     h, w = frame.shape[:2]
     pose = landmarks.get("pose")
@@ -173,7 +173,7 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
             px2, py2 = int(lm2.x * w), int(lm2.y * h)
             cv2.circle(frame, (px2, py2), 4, col, -1)
 
-    _update_and_draw_graphs(frame, gesture_states, thresholds, landmarks)
+    _update_and_draw_graphs(frame, gesture_states, thresholds, landmarks, tracking_stable)
     return frame
 
 
@@ -183,16 +183,19 @@ def _update_and_draw_graphs(
     gesture_states: dict | None,
     thresholds: dict,
     landmarks: dict,
+    tracking_stable: bool = True,
 ) -> None:
     """Update rolling metric history and render mini time-series graphs."""
     ca_state  = (gesture_states or {}).get("crossed_arms", {})
     oa_state  = (gesture_states or {}).get("open_arms", {})
+    ra_state  = (gesture_states or {}).get("raised_arms", {})
     re_state  = (gesture_states or {}).get("raised_eyebrows", {})
     bf_state  = (gesture_states or {}).get("blink_frequency", {})
     tf_state  = (gesture_states or {}).get("touch_face", {})
 
     cross_thr = thresholds.get("crossed_arms", {}).get("wrist_cross_ratio", 0.50)
     open_thr  = thresholds.get("open_arms", {}).get("min_open_ratio", 2.0)
+    ra_thr    = thresholds.get("raised_arms", {}).get("min_raise_margin", 0.05)
     calib     = re_state.get("calibrating", False)
     brow_thr  = re_state.get("personalized_thr") if not calib else None
 
@@ -222,6 +225,8 @@ def _update_and_draw_graphs(
         ("rw-ls", ca_state.get("right_ratio"), cross_thr, False, False),
         ("lw-rs", ca_state.get("left_ratio"),  cross_thr, False, False),
         ("lw-rw", oa_state.get("open_ratio"),  open_thr,  False, False),
+        ("ra-l",  ra_state.get("raise_l"),     ra_thr,    False, False),
+        ("ra-r",  ra_state.get("raise_r"),     ra_thr,    False, False),
         ("iris",  inter_iris,                  None,      True,  False),
         ("rb-ri", re_state.get("ratio_r"),     brow_thr,  False, calib),
         ("lb-li", re_state.get("ratio_l"),     brow_thr,  False, calib),
@@ -243,18 +248,20 @@ def _update_and_draw_graphs(
         _draw_one_graph(frame, 0, y, key, buf, thr, is_ref, is_calib)
         y += _LABEL_H + _GRAPH_H + _GRAPH_GAP
 
-    # ---- horizontal confirmation bars below the 7 graphs ------------
+    # ---- horizontal confirmation bars below the graphs ----------------
     if not gesture_states:
         return
-    _ROW_H   = _LABEL_H + _GRAPH_H + _GRAPH_GAP   # 51px
-    panel_w  = _GRAPH_W + _VAL_W                   # 205px
-    n_gest   = len(gesture_states)
-    bar_gap  = 5
-    bar_w    = (panel_w - bar_gap * (n_gest - 1)) // max(n_gest, 1)
-    bar_h    = 40
-    bar_y    = 11 * _ROW_H + bar_gap               # just below the 11th graph
+    _ROW_H    = _LABEL_H + _GRAPH_H + _GRAPH_GAP   # 51px
+    panel_w   = _GRAPH_W + _VAL_W                   # 205px
+    # blink_frequency is metric-only: its progress is shown in the graphs above
+    bar_states = {k: v for k, v in gesture_states.items() if k != "blink_frequency"}
+    n_gest    = len(bar_states)
+    bar_gap   = 5
+    bar_w     = (panel_w - bar_gap * (n_gest - 1)) // max(n_gest, 1)
+    bar_h     = 40
+    bar_y     = 13 * _ROW_H + bar_gap               # just below the 13th graph
 
-    for i, (g_name, g_state) in enumerate(gesture_states.items()):
+    for i, (g_name, g_state) in enumerate(bar_states.items()):
         bx = i * (bar_w + bar_gap)
         by = bar_y
 
@@ -290,8 +297,14 @@ def _update_and_draw_graphs(
         thr_x = max(bx, min(bx + bar_w - 1, thr_x))
         cv2.line(frame, (thr_x, by), (thr_x, by + bar_h), (255, 255, 255), 1)
 
+        # red tint when tracking is unstable (windows are being reset)
+        if not tracking_stable:
+            ov_unstable = frame.copy()
+            cv2.rectangle(ov_unstable, (bx, by), (bx + bar_w, by + bar_h), (0, 0, 180), -1)
+            cv2.addWeighted(ov_unstable, 0.35, frame, 0.65, 0, frame)
+
         # label
-        short = {"crossed_arms": "ca", "open_arms": "oa", "raised_eyebrows": "re", "blink_frequency": "bf", "touch_face": "tf"}.get(g_name) or g_name[:2]
+        short = {"crossed_arms": "ca", "open_arms": "oa", "raised_arms": "ra", "raised_eyebrows": "re", "blink_frequency": "bf", "touch_face": "tf"}.get(g_name) or g_name[:2]
         cv2.putText(frame, short, (bx + 3, by + bar_h - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
 
