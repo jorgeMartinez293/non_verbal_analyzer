@@ -10,7 +10,7 @@
   "crossed_arms": {
     "min_landmark_visibility": 0.3,
     "min_shoulder_torso_ratio": 0.40,
-    "wrist_cross_ratio": 0.40,
+    "wrist_cross_ratio": 0.10,
     "wrist_height_min_ratio": 0.0,
     "wrist_height_max_ratio": 1.1,
     "confirmation_window": 10,
@@ -46,7 +46,8 @@
     "max_bpm_display": 40.0,
     "confirmation_window": 8,
     "confirmation_ratio": 0.70,
-    "cooldown_frames": 2
+    "cooldown_frames": 2,
+    "eye_span_ratio_min": 0.55
   },
   "touch_face": {
     "hand_face_ratio": 0.35,
@@ -64,5 +65,47 @@
     "confirmation_window": 6,
     "confirmation_ratio": 0.70,
     "cooldown_frames": 50
+  },
+  "head_nod": {
+    "min_nod_amplitude": 0.02,
+    "velocity_threshold": 0.003,
+    "max_cycle_frames": 20,
+    "min_landmark_visibility": 0.3,
+    "confirmation_window": 6,
+    "confirmation_ratio": 0.60,
+    "cooldown_frames": 30
+  },
+  "head_shake": {
+    "min_shake_amplitude": 0.015,
+    "velocity_threshold": 0.003,
+    "max_cycle_frames": 25,
+    "min_landmark_visibility": 0.3,
+    "confirmation_window": 6,
+    "confirmation_ratio": 0.60,
+    "cooldown_frames": 30
+  },
+  "shoulder_shrug": {
+    "min_shrug_ratio": 0.08,
+    "max_asymmetry": 0.3,
+    "max_peak_frames": 15,
+    "calibration_min_samples": 100,
+    "calibration_percentile": 50,
+    "calib_stability_window": 8,
+    "min_shoulder_torso_ratio": 0.25,
+    "min_landmark_visibility": 0.3,
+    "confirmation_window": 8,
+    "confirmation_ratio": 0.60,
+    "cooldown_frames": 40
+  },
+  "smile": {
+    "corner_lift_delta": 0.05,
+    "width_increase_delta": 0.03,
+    "min_inter_iris_dist": 0.06,
+    "calibration_min_samples": 200,
+    "calibration_percentile": 50,
+    "calib_stability_window": 8,
+    "confirmation_window": 10,
+    "confirmation_ratio": 0.70,
+    "cooldown_frames": 60
   }
 }

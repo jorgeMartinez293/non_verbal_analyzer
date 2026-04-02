@@ -23,6 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
+import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
@@ -170,18 +171,27 @@ class VideoProcessor:
         print(f"[VideoProcessor] Size   : {width}x{height}  |  FPS: {fps:.2f}  |  Frames: {total_frames}\n")
 
         # Debug mode: open a VideoWriter for the full annotated output
-        writer = None
+        writer        = None
+        sidebar_w     = 0
+        bottom_margin = 0
         if self.debug:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            out_path = self.output_dir / f"{video_stem}_annotated.mp4"
-            writer   = cv2.VideoWriter(
+            out_path      = self.output_dir / f"{video_stem}_annotated.mp4"
+            sidebar_w     = debug_overlay.SIDEBAR_W
+            # Keep the same aspect ratio as the source: add proportional bottom margin
+            bottom_margin = int(sidebar_w * height / width) if width > 0 else 0
+            writer        = cv2.VideoWriter(
                 str(out_path),
                 cv2.VideoWriter_fourcc(*"mp4v"),
-                fps, (width, height),
+                fps, (width + sidebar_w, height + bottom_margin),
             )
             print(f"[VideoProcessor] Output : {out_path}\n")
 
         self._build_landmarkers()
+
+        # Propagate actual FPS to gesture detectors that need it
+        for g in self.gesture_manager.gestures:
+            g.set_fps(fps)
 
         # Reset stability gate for this video
         self._prev_pose        = None
@@ -241,25 +251,40 @@ class VideoProcessor:
                             for lm in landmarks["face"]
                         ]
 
-                    clean_frame = frame.copy()  # snapshot before any drawing
-                    debug_overlay.draw(frame, landmarks, self.config,
+                    # Build wide canvas: dark sidebar (left) + video (right) + bottom margin
+                    wide_frame = np.zeros((height + bottom_margin, width + sidebar_w, 3), dtype=np.uint8)
+                    wide_frame[:height, sidebar_w:] = frame
+                    clean_frame = wide_frame.copy()  # snapshot before any drawing
+
+                    # video_roi: numpy VIEW into the video area — any drawing is
+                    # automatically clipped to the video bounds by numpy slicing.
+                    video_roi = wide_frame[:height, sidebar_w:]
+
+                    debug_overlay.draw(video_roi, landmarks, self.config,
                                        gesture_states=self.gesture_manager.get_states(),
-                                       tracking_stable=tracking_stable)
+                                       tracking_stable=tracking_stable,
+                                       sidebar_frame=wide_frame)
                     debug_overlay.draw_face_inset(
-                        frame, landmarks,
+                        wide_frame, landmarks,
                         cached_face_lms=self._last_face_lms,
-                        source_frame=clean_frame,
+                        source_frame=clean_frame,  # full clean frame; xo used internally for crop
+                        video_x_offset=sidebar_w,
+                        video_w=width,
+                        video_h=height,
                     )
                     debug_overlay.draw_gesture_state(
-                        frame,
+                        wide_frame,
                         self.gesture_manager.get_states(),
                         alert_states,
                         self.config,
+                        video_x_offset=sidebar_w,
+                        video_w=width,
+                        video_h=height,
                     )
                     for name in alert_states:
                         if alert_states[name] > 0:
                             alert_states[name] -= 1
-                    writer.write(frame)
+                    writer.write(wide_frame)
 
                 frame_idx += 1
                 if frame_idx % 100 == 0:

@@ -45,6 +45,7 @@ class GestureManager:
                     issubclass(obj, BaseGesture)
                     and obj is not BaseGesture
                     and obj.__module__ == module.__name__
+                    and not inspect.isabstract(obj)
                 ):
                     thresholds = self.config.get(gesture_file.stem, {})
                     instance   = obj(thresholds)

@@ -112,8 +112,9 @@ class TouchFace(BaseGesture):
             if hand_lms is None:
                 continue
 
-            hand_min_dist = min(_dist(lm, nose) for lm in hand_lms)
-            ratio = hand_min_dist / shoulder_dist
+            hand_dists    = sorted(_dist(lm, nose) for lm in hand_lms)
+            hand_mid_dist = hand_dists[len(hand_dists) // 2]  # median
+            ratio = hand_mid_dist / shoulder_dist
 
             if ratio < overall_min_ratio:
                 overall_min_ratio = ratio

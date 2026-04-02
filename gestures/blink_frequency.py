@@ -23,6 +23,15 @@ OPEN    → EAR_avg drops below ear_threshold → CLOSING (record start frame)
 CLOSING → EAR_avg rises back               → blink valid if duration ∈ [min_frames, max_frames]
         → duration > max_blink_frames       → voluntary eye hold, discard → OPEN
 
+Sideways-face handling (single-eye mode)
+-----------------------------------------
+When the face is turned, the far eye's landmarks compress, producing an
+unreliable EAR.  To avoid false negatives the detector compares the
+horizontal span (outer-to-inner corner distance) of each eye.  If the ratio
+min(h_r, h_l) / max(h_r, h_l) drops below ``eye_span_ratio_min``, only the
+wider (more reliable) eye's EAR is used for both the blink state machine and
+the sanity gate.
+
 Rolling BPM
 -----------
 A deque stores frame numbers of confirmed blinks.  Each frame, entries older
@@ -37,10 +46,10 @@ Configurable thresholds (config/thresholds.json → "blink_frequency")
 ----------------------------------------------------------------------
 ear_threshold        (float, default 0.20) — EAR below this = eye closed
 detect_min_ear       (float, default 0.10) — sanity gate: skip frame if below (tracking loss)
+eye_span_ratio_min   (float, default 0.55) — span ratio below this = face turned, single-eye mode
 rate_window_frames   (int,   default 900)  — rolling window length in frames
 blink_min_frames     (int,   default 2)    — min blink duration (noise filter)
 blink_max_frames     (int,   default 12)   — max blink duration (eye hold filter)
-fps                  (float, default 30)   — video fps for BPM conversion
 max_bpm_display      (float, default 40)   — overlay bar scale max
 """
 
@@ -69,6 +78,35 @@ def _ear(face, outer, inner, top_a, top_b, bot_a, bot_b) -> float:
     return vertical / horizontal if horizontal > 0 else 0.0
 
 
+def _effective_ear(face, span_ratio_min: float):
+    """Compute the EAR to use for blink detection, handling sideways faces.
+
+    Measures the horizontal span (outer-to-inner corner) of each eye.  When the
+    face is turned, the far eye's span shrinks.  If the ratio between the
+    smaller and larger span falls below *span_ratio_min*, only the wider
+    (more reliable) eye's EAR is used.
+
+    Returns ``(ear_effective, ear_r, ear_l, h_r, h_l, face_turned)``.
+    """
+    ear_r = _ear(face, *_R_EYE)
+    ear_l = _ear(face, *_L_EYE)
+
+    h_r = _dist(face[_R_EYE[0]], face[_R_EYE[1]])
+    h_l = _dist(face[_L_EYE[0]], face[_L_EYE[1]])
+
+    max_h = max(h_r, h_l)
+    if max_h <= 0:
+        return (ear_r + ear_l) / 2.0, ear_r, ear_l, h_r, h_l, False
+
+    span_ratio = min(h_r, h_l) / max_h
+
+    if span_ratio < span_ratio_min:
+        ear_effective = ear_r if h_r >= h_l else ear_l
+        return ear_effective, ear_r, ear_l, h_r, h_l, True
+    else:
+        return (ear_r + ear_l) / 2.0, ear_r, ear_l, h_r, h_l, False
+
+
 # --------------------------------------------------------------------------
 
 class BlinkFrequency(BaseGesture):
@@ -77,6 +115,7 @@ class BlinkFrequency(BaseGesture):
         super().__init__("blink_frequency", thresholds)
 
         self._ear_threshold = thresholds.get("ear_threshold", 0.20)
+        self._fps           = thresholds.get("fps", 30.0)
 
         # Blink state machine
         self._in_blink    = False
@@ -91,6 +130,11 @@ class BlinkFrequency(BaseGesture):
         self._ear_r = 0.0
         self._ear_l = 0.0
         self._bpm   = 0.0
+        self._face_turned = False
+
+    # ------------------------------------------------------------------
+    def set_fps(self, fps: float) -> None:
+        self._fps = fps
 
     # ------------------------------------------------------------------
     def update(self, landmarks: dict) -> bool:
@@ -104,8 +148,9 @@ class BlinkFrequency(BaseGesture):
         face = landmarks.get("face")
         if face is None or len(face) <= max(_REQUIRED):
             return False
-        ear_avg = (_ear(face, *_R_EYE) + _ear(face, *_L_EYE)) / 2.0
-        return ear_avg < self._ear_threshold
+        span_min = self.thresholds.get("eye_span_ratio_min", 0.55)
+        ear_eff, _, _, _, _, _ = _effective_ear(face, span_min)
+        return ear_eff < self._ear_threshold
 
     # ------------------------------------------------------------------
     @property
@@ -127,6 +172,7 @@ class BlinkFrequency(BaseGesture):
             "blink_rate":         self._bpm,
             "blink_count":        len(self._blink_frames),
             "in_blink":           self._in_blink,
+            "face_turned":        self._face_turned,
         }
 
     # ------------------------------------------------------------------
@@ -138,21 +184,29 @@ class BlinkFrequency(BaseGesture):
             return
 
         detect_min = self.thresholds.get("detect_min_ear", 0.10)
-        ear_r = _ear(face, *_R_EYE)
-        ear_l = _ear(face, *_L_EYE)
+        span_min   = self.thresholds.get("eye_span_ratio_min", 0.55)
 
-        # Skip frame if tracking has collapsed (landmark positions invalid).
+        ear_eff, ear_r, ear_l, h_r, h_l, turned = _effective_ear(face, span_min)
+        self._face_turned = turned
+
+        # Sanity gate: skip frame if tracking has collapsed.
         # Do NOT reset _in_blink here: a hard blink can legitimately drop the EAR
         # below detect_min. Only a full face loss (handled above) should abort a
         # blink in progress.
-        if ear_r < detect_min or ear_l < detect_min:
-            return
+        # When face is turned, only check the reliable (wider) eye.
+        if turned:
+            reliable_ear = ear_r if h_r >= h_l else ear_l
+            if reliable_ear < detect_min:
+                return
+        else:
+            if ear_r < detect_min or ear_l < detect_min:
+                return
 
         # Frame is valid: advance the visible-frame counter
         self._valid_frame_count += 1
         self._ear_r = ear_r
         self._ear_l = ear_l
-        ear_avg = (ear_r + ear_l) / 2.0
+        ear_avg = ear_eff
 
         # ---- blink state machine (counts in valid frames) -----------
         thr        = self._ear_threshold
@@ -175,7 +229,7 @@ class BlinkFrequency(BaseGesture):
 
         # ---- rolling BPM (based on visible frames only) -------------
         window = self.thresholds.get("rate_window_frames", 900)
-        fps    = self.thresholds.get("fps", 30.0)
+        fps    = self._fps
         cutoff = self._valid_frame_count - window
         while self._blink_frames and self._blink_frames[0] < cutoff:
             self._blink_frames.popleft()

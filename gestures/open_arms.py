@@ -74,6 +74,12 @@ class OpenArms(BaseGesture):
         except (IndexError, AttributeError):
             return False
 
+        # ---- visibility gate --------------------------------------------
+        min_vis = self.thresholds.get("min_landmark_visibility", 0.5)
+        for lm in (lw, rw, ls, rs, le, re):
+            if lm.visibility < min_vis:
+                return False
+
         # ---- always compute metrics ----------------------------------
         shoulder_dist = _dist(ls, rs)
         wrist_dist    = _dist(lw, rw)

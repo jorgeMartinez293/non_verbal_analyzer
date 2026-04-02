@@ -28,20 +28,20 @@ _GRAPH_H     = 35    # height of graph plot area
 _GRAPH_GAP   = 4     # vertical gap between graphs
 _LABEL_H     = 12    # height of label row above each graph
 _VAL_W       = 75    # extra width to the right for current-value text
+_COL_GAP     = 10   # horizontal gap between the two graph columns
+_COL_W       = _GRAPH_W + _VAL_W          # 205 — width of one graph column
+SIDEBAR_W    = _COL_W * 2 + _COL_GAP      # 420 — total sidebar width (public)
 _history: dict[str, deque] = {}
 _scale:   dict[str, float] = {}   # hi per metric — fixed at thr*1.3; expands up for refs
 
 # MediaPipe Pose landmark indices used by CrossedArms
 _IDX = {
     "L_SHOULDER": 11, "R_SHOULDER": 12,
-    "L_ELBOW":    13, "R_ELBOW":    14,
     "L_WRIST":    15, "R_WRIST":    16,
     "L_HIP":      23, "R_HIP":      24,
 }
 
 _COL_SHOULDER = (255, 255,   0)
-_COL_ELBOW    = (  0, 255, 255)
-_COL_WRIST    = (255, 255, 255)
 _COL_HIP      = (160, 160, 160)
 _COL_BONE     = ( 80, 200,  80)
 _COL_MET      = (  0, 220,   0)
@@ -59,8 +59,15 @@ def _dist_lm(a, b) -> float:
 
 # -----------------------------------------------------------------------
 def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
-         gesture_states: dict | None = None, tracking_stable: bool = True) -> np.ndarray:
-    """Draw the 8 pose keypoints and diagnostic lines onto *frame* (in-place)."""
+         gesture_states: dict | None = None, tracking_stable: bool = True,
+         sidebar_frame: np.ndarray | None = None) -> np.ndarray:
+    """Draw the 8 pose keypoints and diagnostic lines onto *frame* (in-place).
+
+    *frame* must be a view of the video area only (video_w × video_h).
+    Drawing is automatically clipped to the video bounds by numpy slicing.
+    Pass *sidebar_frame* (the full wide canvas) to render metric graphs in
+    the sidebar; if omitted the graphs are drawn on *frame* itself.
+    """
     h, w = frame.shape[:2]
     pose = landmarks.get("pose")
 
@@ -94,40 +101,25 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
     cv2.rectangle(frame, (band_left, band_top), (band_right, band_bottom),
                   _COL_BAND, 1)
 
-    # ---- arm skeleton ------------------------------------------------
+    # ---- arm lines (shoulder → wrist, no elbow needed) ---------------
     for side in ("L", "R"):
         cv2.line(frame, _px(lm[f"{side}_SHOULDER"], w, h),
-                        _px(lm[f"{side}_ELBOW"],    w, h), _COL_BONE, 2)
-        cv2.line(frame, _px(lm[f"{side}_ELBOW"],    w, h),
                         _px(lm[f"{side}_WRIST"],    w, h), _COL_BONE, 2)
 
-    # ---- crossing ratios (arm-length normalised) ---------------------
-    cross_thresh = crossed_cfg.get("wrist_cross_ratio", 0.40)
+    # ---- wrist crossing (shoulder-width normalised) ------------------
+    cross_thresh  = crossed_cfg.get("wrist_cross_ratio", 0.10)
+    shoulder_dist = lm["L_SHOULDER"].x - lm["R_SHOULDER"].x
+    cross_ratio   = ((lm["L_WRIST"].x - lm["R_WRIST"].x) / shoulder_dist
+                     if shoulder_dist > 0 else 0.0)
+    crossed_ok    = cross_ratio >= cross_thresh
 
-    arm_len_r = (_dist_lm(lm["R_SHOULDER"], lm["R_ELBOW"]) +
-                 _dist_lm(lm["R_ELBOW"],    lm["R_WRIST"]))
-    arm_len_l = (_dist_lm(lm["L_SHOULDER"], lm["L_ELBOW"]) +
-                 _dist_lm(lm["L_ELBOW"],    lm["L_WRIST"]))
-
-    if arm_len_r > 0 and arm_len_l > 0:
-        right_ratio = (lm["R_WRIST"].x - lm["R_SHOULDER"].x) / arm_len_r
-        left_ratio  = (lm["L_SHOULDER"].x - lm["L_WRIST"].x) / arm_len_l
-    else:
-        right_ratio = left_ratio = 0.0
-
-    right_ok    = right_ratio >= cross_thresh
-    left_ok     = left_ratio  >= cross_thresh
-
-    # Wrist connector: green only when both ratios meet the threshold
+    # Wrist connector: green when wrists are crossed past the threshold
     cv2.line(frame, _px(lm["L_WRIST"], w, h), _px(lm["R_WRIST"], w, h),
-             _COL_MET if (right_ok and left_ok) else _COL_FAIL, 3)
+             _COL_MET if crossed_ok else _COL_FAIL, 3)
 
-    # ---- wrist dots (coloured by their own crossing ratio) ----------
-    for key, ratio_val, ratio_ok in [
-        ("R_WRIST", right_ratio, right_ok),
-        ("L_WRIST", left_ratio,  left_ok),
-    ]:
-        col = _COL_MET if ratio_ok else _COL_FAIL
+    # ---- wrist dots --------------------------------------------------
+    for key in ("L_WRIST", "R_WRIST"):
+        col = _COL_MET if crossed_ok else _COL_FAIL
         cv2.circle(frame, _px(lm[key], w, h), 8, col,            -1)
         cv2.circle(frame, _px(lm[key], w, h), 8, (255, 255, 255), 1)
 
@@ -170,10 +162,12 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
         )
         col = (0, 230, 0) if hand_active else (200, 200, 200)
         for lm2 in hand:
-            px2, py2 = int(lm2.x * w), int(lm2.y * h)
-            cv2.circle(frame, (px2, py2), 4, col, -1)
+            cv2.circle(frame, _px(lm2, w, h), 4, col, -1)
 
-    _update_and_draw_graphs(frame, gesture_states, thresholds, landmarks, tracking_stable)
+    _update_and_draw_graphs(
+        sidebar_frame if sidebar_frame is not None else frame,
+        gesture_states, thresholds, landmarks, tracking_stable,
+    )
     return frame
 
 
@@ -192,15 +186,35 @@ def _update_and_draw_graphs(
     re_state  = (gesture_states or {}).get("raised_eyebrows", {})
     bf_state  = (gesture_states or {}).get("blink_frequency", {})
     tf_state  = (gesture_states or {}).get("touch_face", {})
+    hn_state  = (gesture_states or {}).get("head_nod", {})
+    hk_state  = (gesture_states or {}).get("head_shake", {})
+    ss_state  = (gesture_states or {}).get("shoulder_shrug", {})
+    sm_state  = (gesture_states or {}).get("smile", {})
 
-    cross_thr = thresholds.get("crossed_arms", {}).get("wrist_cross_ratio", 0.50)
+    cross_thr = thresholds.get("crossed_arms", {}).get("wrist_cross_ratio", 0.10)
     open_thr  = thresholds.get("open_arms", {}).get("min_open_ratio", 2.0)
     ra_thr    = thresholds.get("raised_arms", {}).get("min_raise_margin", 0.05)
     calib     = re_state.get("calibrating", False)
     brow_thr  = re_state.get("personalized_thr") if not calib else None
-
     ear_thr   = thresholds.get("blink_frequency", {}).get("ear_threshold", 0.20)
     tf_thr    = thresholds.get("touch_face", {}).get("hand_face_ratio", 0.35)
+    hn_thr    = thresholds.get("head_nod",         {}).get("velocity_threshold",   0.003)
+    hk_thr    = thresholds.get("head_shake",       {}).get("velocity_threshold",   0.003)
+    ss_thr    = thresholds.get("shoulder_shrug",   {}).get("min_shrug_ratio",      0.08)
+    sm_l_thr  = thresholds.get("smile",            {}).get("corner_lift_delta",    0.05)
+    sm_w_thr  = thresholds.get("smile",            {}).get("width_increase_delta", 0.03)
+    ss_calib  = ss_state.get("calibrating", False)
+    sm_calib  = sm_state.get("calibrating", False)
+
+    # Smile: show delta from baseline so threshold is meaningful
+    _sm_lift_r = sm_state.get("corner_lift"); _sm_base_l = sm_state.get("baseline_lift")
+    sm_lift    = (_sm_lift_r - _sm_base_l) if (_sm_lift_r is not None and _sm_base_l is not None) else _sm_lift_r
+    _sm_wid_r  = sm_state.get("mouth_width"); _sm_base_w = sm_state.get("baseline_width")
+    sm_width   = (_sm_wid_r  - _sm_base_w) if (_sm_wid_r  is not None and _sm_base_w  is not None) else _sm_wid_r
+
+    # Head motion: absolute velocity magnitude so graph doesn't clip negatives
+    _hn_v = hn_state.get("nod_velocity");   hn_vel = abs(_hn_v) if _hn_v is not None else None
+    _hk_v = hk_state.get("shake_velocity"); hk_vel = abs(_hk_v) if _hk_v is not None else None
 
     shoulder_eu = oa_state.get("shoulder_dist")
     if shoulder_eu is None:
@@ -219,21 +233,25 @@ def _update_and_draw_graphs(
             v = abs(face[468].x - face[473].x)
             inter_iris = v if v > 0 else None
 
-    # (key, value, threshold, is_ref, calibrating)
+    # (key, value, threshold, is_ref, calibrating, display_label)
     specs = [
-        ("ls-rs", shoulder_eu,                None,      True,  False),
-        ("rw-ls", ca_state.get("right_ratio"), cross_thr, False, False),
-        ("lw-rs", ca_state.get("left_ratio"),  cross_thr, False, False),
-        ("lw-rw", oa_state.get("open_ratio"),  open_thr,  False, False),
-        ("ra-l",  ra_state.get("raise_l"),     ra_thr,    False, False),
-        ("ra-r",  ra_state.get("raise_r"),     ra_thr,    False, False),
-        ("iris",  inter_iris,                  None,      True,  False),
-        ("rb-ri", re_state.get("ratio_r"),     brow_thr,  False, calib),
-        ("lb-li", re_state.get("ratio_l"),     brow_thr,  False, calib),
-        ("ear-r", bf_state.get("ear_r"),       ear_thr,   False, False),
-        ("ear-l", bf_state.get("ear_l"),       ear_thr,   False, False),
-        ("bpm",   bf_state.get("blink_rate"),  None,      True,  False),
-        ("tf-hf", tf_state.get("hand_face_ratio"), tf_thr, False, False),
+        ("ls-rs", shoulder_eu,                     None,      True,  False,    "shoulder dist"),
+        ("ca-cr", ca_state.get("cross_ratio"),      cross_thr, False, False,    "wrist cross"),
+        ("lw-rw", oa_state.get("open_ratio"),       open_thr,  False, False,    "arm spread"),
+        ("ra-l",  ra_state.get("raise_l"),          ra_thr,    False, False,    "raise left"),
+        ("ra-r",  ra_state.get("raise_r"),          ra_thr,    False, False,    "raise right"),
+        ("iris",  inter_iris,                       None,      True,  False,    "inter-iris"),
+        ("rb-ri", re_state.get("ratio_r"),          brow_thr,  False, calib,    "eyebrow right"),
+        ("lb-li", re_state.get("ratio_l"),          brow_thr,  False, calib,    "eyebrow left"),
+        ("ear-r", bf_state.get("ear_r"),            ear_thr,   False, False,    "eye AR right"),
+        ("ear-l", bf_state.get("ear_l"),            ear_thr,   False, False,    "eye AR left"),
+        ("bpm",   bf_state.get("blink_rate"),       None,      True,  False,    "blink rate"),
+        ("tf-hf", tf_state.get("hand_face_ratio"),  tf_thr,    False, False,    "hand-face"),
+        ("nd-v",  hn_vel,                           hn_thr,    False, False,    "nod velocity"),
+        ("sk-v",  hk_vel,                           hk_thr,    False, False,    "shake velocity"),
+        ("ss-r",  ss_state.get("shrug_rise"),        ss_thr,    False, ss_calib, "shrug rise"),
+        ("sm-l",  sm_lift,                           sm_l_thr,  False, sm_calib, "smile lift"),
+        ("sm-w",  sm_width,                          sm_w_thr,  False, sm_calib, "smile width"),
     ]
 
     for key, val, *_ in specs:
@@ -242,29 +260,45 @@ def _update_and_draw_graphs(
         if val is not None:
             _history[key].append(float(val))
 
-    y = 0
-    for key, _val, thr, is_ref, is_calib in specs:
+    # ---- sidebar background + separator line -------------------------
+    h_frame = frame.shape[0]
+    cv2.rectangle(frame, (0, 0), (SIDEBAR_W - 1, h_frame), (18, 18, 18), -1)
+    cv2.line(frame, (SIDEBAR_W - 1, 0), (SIDEBAR_W - 1, h_frame), (60, 60, 60), 1)
+
+    # ---- 2-column graph layout ---------------------------------------
+    col_xs = [0, _COL_W + _COL_GAP]   # x-start for each column
+    col_ys = [0, 0]                    # current y for each column
+    half   = (len(specs) + 1) // 2    # first column gets ceil(n/2)
+
+    for i, (key, _val, thr, is_ref, is_calib, label) in enumerate(specs):
+        col = 0 if i < half else 1
+        x0  = col_xs[col]
+        y0  = col_ys[col]
+        if y0 + _LABEL_H + _GRAPH_H > h_frame:
+            continue
         buf = _history.get(key, deque())
-        _draw_one_graph(frame, 0, y, key, buf, thr, is_ref, is_calib)
-        y += _LABEL_H + _GRAPH_H + _GRAPH_GAP
+        _draw_one_graph(frame, x0, y0, label, buf, thr, is_ref, is_calib)
+        col_ys[col] += _LABEL_H + _GRAPH_H + _GRAPH_GAP
 
     # ---- horizontal confirmation bars below the graphs ----------------
     if not gesture_states:
         return
-    h_frame   = frame.shape[0]
-    panel_w   = _GRAPH_W + _VAL_W                   # 205px
-    # blink_frequency is metric-only: its progress is shown in the graphs above
-    bar_states = {k: v for k, v in gesture_states.items() if k != "blink_frequency"}
+    # metric-only gestures: exclude from confirmation bars
+    _NO_BARS = {"blink_frequency"}
+    bar_states = {k: v for k, v in gesture_states.items() if k not in _NO_BARS}
     n_gest    = len(bar_states)
-    bar_gap   = 5
-    bar_w     = (panel_w - bar_gap * (n_gest - 1)) // max(n_gest, 1)
+    if n_gest == 0:
+        return
+    bar_gap   = 4
     bar_h     = 40
-    bar_y     = min(y + bar_gap, h_frame - bar_h - 2)  # just below last graph, clamped
+    bar_y     = min(max(col_ys) + bar_gap, h_frame - bar_h - 2)
     if bar_y < 0:
         return
+    available_w = SIDEBAR_W - 2 * bar_gap
+    bar_w       = (available_w - bar_gap * (n_gest - 1)) // max(n_gest, 1)
 
     for i, (g_name, g_state) in enumerate(bar_states.items()):
-        bx = i * (bar_w + bar_gap)
+        bx = bar_gap + i * (bar_w + bar_gap)
         by = bar_y
 
         # background
@@ -278,7 +312,6 @@ def _update_and_draw_graphs(
         cooldown_tot = max(1, thresholds.get(g_name, {}).get("cooldown_frames", 50))
 
         if cooldown_rem > 0:
-            # drain slowly as cooldown expires
             fill_ratio = cooldown_rem / cooldown_tot
             col        = (0, 140, 0)
         elif calib:
@@ -301,14 +334,18 @@ def _update_and_draw_graphs(
         thr_x = max(bx, min(bx + bar_w - 1, thr_x))
         cv2.line(frame, (thr_x, by), (thr_x, by + bar_h), (255, 255, 255), 1)
 
-        # red tint when tracking is unstable (windows are being reset)
+        # red tint when tracking is unstable
         if not tracking_stable:
             ov_unstable = frame.copy()
             cv2.rectangle(ov_unstable, (bx, by), (bx + bar_w, by + bar_h), (0, 0, 180), -1)
             cv2.addWeighted(ov_unstable, 0.35, frame, 0.65, 0, frame)
 
         # label
-        short = {"crossed_arms": "ca", "open_arms": "oa", "raised_arms": "ra", "raised_eyebrows": "re", "blink_frequency": "bf", "touch_face": "tf"}.get(g_name) or g_name[:2]
+        short = {
+            "crossed_arms": "ca", "open_arms": "oa", "raised_arms":    "ra",
+            "raised_eyebrows": "re", "touch_face": "tf", "head_nod":   "hn",
+            "head_shake":   "hk", "shoulder_shrug": "ss", "smile":     "sm",
+        }.get(g_name) or g_name[:2]
         cv2.putText(frame, short, (bx + 3, by + bar_h - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
 
@@ -396,9 +433,15 @@ def draw_gesture_state(
     gesture_states: dict,
     alert_states:   dict,
     thresholds:     dict,
+    video_x_offset: int = 0,
+    video_w: int | None = None,
+    video_h: int | None = None,
 ) -> np.ndarray:
-    """Draws the DETECTED banner at the bottom when a gesture fires."""
-    h, w = frame.shape[:2]
+    """Draws the DETECTED banner at the bottom of the video area when a gesture fires."""
+    h_total, w_total = frame.shape[:2]
+    w  = video_w if video_w is not None else w_total
+    h  = video_h if video_h is not None else h_total   # banners anchor to bottom of video area
+    xo = video_x_offset
     font       = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = max(0.45, w / 1400)
     pad        = 6
@@ -411,11 +454,11 @@ def draw_gesture_state(
             banner_h = int(44 * font_scale / 0.45)
             y_cursor -= banner_h + pad
             overlay  = frame.copy()
-            cv2.rectangle(overlay, (0, y_cursor), (w, y_cursor + banner_h), (0, 140, 0), -1)
+            cv2.rectangle(overlay, (xo, y_cursor), (xo + w, y_cursor + banner_h), (0, 140, 0), -1)
             cv2.addWeighted(overlay, alpha * 0.8, frame, 1 - alpha * 0.8, 0, frame)
             label = f"DETECTED: {gesture_name.replace('_', ' ').upper()}"
             tw = cv2.getTextSize(label, font, font_scale * 1.4, 2)[0][0]
-            cv2.putText(frame, label, ((w - tw) // 2, y_cursor + banner_h - pad),
+            cv2.putText(frame, label, (xo + (w - tw) // 2, y_cursor + banner_h - pad),
                         font, font_scale * 1.4, (255, 255, 255), 2, cv2.LINE_AA)
 
     return frame
@@ -427,10 +470,13 @@ def draw_face_inset(
     landmarks: dict,
     cached_face_lms=None,
     source_frame: np.ndarray | None = None,
+    video_x_offset: int = 0,
+    video_w: int | None = None,
+    video_h: int | None = None,
 ) -> np.ndarray:
     """
     Crop the face region and embed it as a picture-in-picture in the
-    top-right corner of *frame*.
+    top-right corner of the video area of *frame*.
 
     source_frame: the clean (un-annotated) frame to crop from.  If None,
                   falls back to *frame* itself (legacy behaviour).
@@ -442,7 +488,10 @@ def draw_face_inset(
     Dots are drawn from the current face landmarks when available, or from
     cached_face_lms when the face landmarker has dropped out temporarily.
     """
-    h, w = frame.shape[:2]
+    h_total, w_total = frame.shape[:2]
+    w  = video_w if video_w is not None else w_total
+    h  = video_h if video_h is not None else h_total   # original video height for landmark coords
+    xo = video_x_offset
 
     pose_lms = landmarks.get("pose")
     face_lms = landmarks.get("face") or cached_face_lms
@@ -451,9 +500,6 @@ def draw_face_inset(
         return frame
 
     # ---- bounding box always from current pose head landmarks -------
-    # Pose tracking in VIDEO mode is much more stable than face tracking.
-    # Using it for the bbox guarantees the window keeps moving with the
-    # subject regardless of face landmarker state.
     head = [pose_lms[i] for i in range(11) if pose_lms[i].visibility > 0.3]
     if not head:
         return frame
@@ -474,14 +520,19 @@ def draw_face_inset(
     if x_max <= x_min or y_max <= y_min:
         return frame
 
-    # ---- crop -------------------------------------------------------
-    src  = source_frame if source_frame is not None else frame
-    crop = src[y_min:y_max, x_min:x_max].copy()
+    # ---- crop from the video portion of source frame ----------------
+    src     = source_frame if source_frame is not None else frame
+    src_w   = src.shape[1]
+    crop_x0 = max(0, xo + x_min)
+    crop_x1 = min(src_w, xo + x_max)
+    if crop_x1 <= crop_x0:
+        return frame
+    crop = src[y_min:y_max, crop_x0:crop_x1].copy()
     ch, cw = crop.shape[:2]
     if cw <= 0 or ch <= 0:
         return frame
 
-    # ---- scale inset to 1/3 of frame width, keep aspect ratio ------
+    # ---- scale inset to 1/3 of video width, keep aspect ratio ------
     inset_w = max(1, w // 3)
     inset_h = max(1, int(inset_w * ch / cw))
     inset_h = min(inset_h, h // 2)
@@ -502,12 +553,13 @@ def draw_face_inset(
     # ---- border -----------------------------------------------------
     cv2.rectangle(inset, (0, 0), (inset_w - 1, inset_h - 1), (200, 200, 200), 2)
 
-    # ---- place in top-right corner ----------------------------------
-    margin = 10
-    x_off  = w - inset_w - margin
-    y_off  = margin
+    # ---- place in top-right corner of the video area ----------------
+    margin  = 10
+    x_off   = xo + w - inset_w - margin
+    y_off   = margin
+    frame_w = frame.shape[1]
 
-    if x_off >= 0 and y_off + inset_h <= h:
+    if x_off >= 0 and x_off + inset_w <= frame_w and y_off + inset_h <= h:
         frame[y_off: y_off + inset_h, x_off: x_off + inset_w] = inset
 
     return frame
