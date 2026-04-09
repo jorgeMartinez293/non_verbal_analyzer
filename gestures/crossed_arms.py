@@ -8,7 +8,7 @@ The required gap is normalised by the horizontal shoulder distance, which
 scales with camera distance, making the threshold depth-invariant.
 
     shoulder_dist = ls.x - rs.x          (positive when subject faces camera)
-    cross_gap     = lw.x - rw.x          (positive = right wrist is left of left wrist)
+    cross_gap     = rw.x - lw.x          (positive = right wrist is right of left wrist = arms crossed)
     cross_ratio   = cross_gap / shoulder_dist
 
 Trigger: cross_ratio >= wrist_cross_ratio
@@ -65,7 +65,7 @@ class CrossedArms(BaseGesture):
             lw = pose[_L_WRIST];    rw = pose[_R_WRIST]
             s_dist = ls.x - rs.x
             if s_dist > 0:
-                self._last_metrics = {"cross_ratio": (lw.x - rw.x) / s_dist}
+                self._last_metrics = {"cross_ratio": (rw.x - lw.x) / s_dist}
         except (IndexError, AttributeError):
             pass
 
@@ -96,7 +96,7 @@ class CrossedArms(BaseGesture):
             return False
 
         # ---- wrist crossing (shoulder-width normalised) ---------------
-        cross_ratio = (lw.x - rw.x) / shoulder_dist
+        cross_ratio = (rw.x - lw.x) / shoulder_dist
         threshold   = self.thresholds.get("wrist_cross_ratio", 0.10)
         if cross_ratio < threshold:
             return False

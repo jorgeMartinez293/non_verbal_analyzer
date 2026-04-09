@@ -109,7 +109,7 @@ def draw(frame: np.ndarray, landmarks: dict, thresholds: dict,
     # ---- wrist crossing (shoulder-width normalised) ------------------
     cross_thresh  = crossed_cfg.get("wrist_cross_ratio", 0.10)
     shoulder_dist = lm["L_SHOULDER"].x - lm["R_SHOULDER"].x
-    cross_ratio   = ((lm["L_WRIST"].x - lm["R_WRIST"].x) / shoulder_dist
+    cross_ratio   = ((lm["R_WRIST"].x - lm["L_WRIST"].x) / shoulder_dist
                      if shoulder_dist > 0 else 0.0)
     crossed_ok    = cross_ratio >= cross_thresh
 
@@ -186,10 +186,6 @@ def _update_and_draw_graphs(
     re_state  = (gesture_states or {}).get("raised_eyebrows", {})
     bf_state  = (gesture_states or {}).get("blink_frequency", {})
     tf_state  = (gesture_states or {}).get("touch_face", {})
-    hn_state  = (gesture_states or {}).get("head_nod", {})
-    hk_state  = (gesture_states or {}).get("head_shake", {})
-    ss_state  = (gesture_states or {}).get("shoulder_shrug", {})
-    sm_state  = (gesture_states or {}).get("smile", {})
 
     cross_thr = thresholds.get("crossed_arms", {}).get("wrist_cross_ratio", 0.10)
     open_thr  = thresholds.get("open_arms", {}).get("min_open_ratio", 2.0)
@@ -198,23 +194,6 @@ def _update_and_draw_graphs(
     brow_thr  = re_state.get("personalized_thr") if not calib else None
     ear_thr   = thresholds.get("blink_frequency", {}).get("ear_threshold", 0.20)
     tf_thr    = thresholds.get("touch_face", {}).get("hand_face_ratio", 0.35)
-    hn_thr    = thresholds.get("head_nod",         {}).get("velocity_threshold",   0.003)
-    hk_thr    = thresholds.get("head_shake",       {}).get("velocity_threshold",   0.003)
-    ss_thr    = thresholds.get("shoulder_shrug",   {}).get("min_shrug_ratio",      0.08)
-    sm_l_thr  = thresholds.get("smile",            {}).get("corner_lift_delta",    0.05)
-    sm_w_thr  = thresholds.get("smile",            {}).get("width_increase_delta", 0.03)
-    ss_calib  = ss_state.get("calibrating", False)
-    sm_calib  = sm_state.get("calibrating", False)
-
-    # Smile: show delta from baseline so threshold is meaningful
-    _sm_lift_r = sm_state.get("corner_lift"); _sm_base_l = sm_state.get("baseline_lift")
-    sm_lift    = (_sm_lift_r - _sm_base_l) if (_sm_lift_r is not None and _sm_base_l is not None) else _sm_lift_r
-    _sm_wid_r  = sm_state.get("mouth_width"); _sm_base_w = sm_state.get("baseline_width")
-    sm_width   = (_sm_wid_r  - _sm_base_w) if (_sm_wid_r  is not None and _sm_base_w  is not None) else _sm_wid_r
-
-    # Head motion: absolute velocity magnitude so graph doesn't clip negatives
-    _hn_v = hn_state.get("nod_velocity");   hn_vel = abs(_hn_v) if _hn_v is not None else None
-    _hk_v = hk_state.get("shake_velocity"); hk_vel = abs(_hk_v) if _hk_v is not None else None
 
     shoulder_eu = oa_state.get("shoulder_dist")
     if shoulder_eu is None:
@@ -247,11 +226,6 @@ def _update_and_draw_graphs(
         ("ear-l", bf_state.get("ear_l"),            ear_thr,   False, False,    "eye AR left"),
         ("bpm",   bf_state.get("blink_rate"),       None,      True,  False,    "blink rate"),
         ("tf-hf", tf_state.get("hand_face_ratio"),  tf_thr,    False, False,    "hand-face"),
-        ("nd-v",  hn_vel,                           hn_thr,    False, False,    "nod velocity"),
-        ("sk-v",  hk_vel,                           hk_thr,    False, False,    "shake velocity"),
-        ("ss-r",  ss_state.get("shrug_rise"),        ss_thr,    False, ss_calib, "shrug rise"),
-        ("sm-l",  sm_lift,                           sm_l_thr,  False, sm_calib, "smile lift"),
-        ("sm-w",  sm_width,                          sm_w_thr,  False, sm_calib, "smile width"),
     ]
 
     for key, val, *_ in specs:
@@ -334,17 +308,10 @@ def _update_and_draw_graphs(
         thr_x = max(bx, min(bx + bar_w - 1, thr_x))
         cv2.line(frame, (thr_x, by), (thr_x, by + bar_h), (255, 255, 255), 1)
 
-        # red tint when tracking is unstable
-        if not tracking_stable:
-            ov_unstable = frame.copy()
-            cv2.rectangle(ov_unstable, (bx, by), (bx + bar_w, by + bar_h), (0, 0, 180), -1)
-            cv2.addWeighted(ov_unstable, 0.35, frame, 0.65, 0, frame)
-
         # label
         short = {
-            "crossed_arms": "ca", "open_arms": "oa", "raised_arms":    "ra",
-            "raised_eyebrows": "re", "touch_face": "tf", "head_nod":   "hn",
-            "head_shake":   "hk", "shoulder_shrug": "ss", "smile":     "sm",
+            "crossed_arms": "ca", "open_arms": "oa", "raised_arms": "ra",
+            "raised_eyebrows": "re", "touch_face": "tf",
         }.get(g_name) or g_name[:2]
         cv2.putText(frame, short, (bx + 3, by + bar_h - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
@@ -464,8 +431,119 @@ def draw_gesture_state(
     return frame
 
 
+# ── fixed proportions for the bottom-strip insets ────────────────────────
+_INSET_FACE_ASPECT = 0.80   # face crop  width / height
+_INSET_HAND_ASPECT = 0.75   # hand crop  width / height
+
+
+def _placeholder(w: int, h: int, label: str) -> np.ndarray:
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    cv2.rectangle(img, (0, 0), (w - 1, h - 1), (55, 55, 55), 1)
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
+    cv2.putText(img, label, ((w - tw) // 2, (h + th) // 2),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (90, 90, 90), 1, cv2.LINE_AA)
+    return img
+
+
+def _crop_face(
+    src: np.ndarray,
+    landmarks: dict,
+    cached_face_lms,
+    vw: int, vh: int, xo: int,
+    out_w: int, out_h: int,
+) -> np.ndarray:
+    pose_lms = landmarks.get("pose")
+    face_lms = landmarks.get("face") or cached_face_lms
+
+    if pose_lms is None:
+        return _placeholder(out_w, out_h, "face")
+
+    head = [pose_lms[i] for i in range(11) if pose_lms[i].visibility > 0.3]
+    if not head:
+        return _placeholder(out_w, out_h, "face")
+
+    xs = [lm.x * vw for lm in head]
+    ys = [lm.y * vh for lm in head]
+    x_min, x_max = int(min(xs)), int(max(xs))
+    y_min, y_max = int(min(ys)), int(max(ys))
+    pad_x = max(10, int((x_max - x_min) * 0.35))
+    pad_y = max(10, int((y_max - y_min) * 0.60))
+    x_min = max(0, x_min - pad_x);  x_max = min(vw, x_max + pad_x)
+    y_min = max(0, y_min - pad_y);  y_max = min(vh, y_max + pad_y)
+
+    if x_max <= x_min or y_max <= y_min:
+        return _placeholder(out_w, out_h, "face")
+
+    crop_x0 = max(0, xo + x_min);  crop_x1 = min(src.shape[1], xo + x_max)
+    if crop_x1 <= crop_x0:
+        return _placeholder(out_w, out_h, "face")
+
+    crop = src[y_min:y_max, crop_x0:crop_x1]
+    if crop.size == 0:
+        return _placeholder(out_w, out_h, "face")
+
+    result = cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+
+    if face_lms:
+        sx = out_w / max(x_max - x_min, 1)
+        sy = out_h / max(y_max - y_min, 1)
+        for lm in face_lms:
+            px = int((lm.x * vw - x_min) * sx)
+            py = int((lm.y * vh - y_min) * sy)
+            if 0 <= px < out_w and 0 <= py < out_h:
+                cv2.circle(result, (px, py), 1, (0, 230, 0), -1)
+
+    cv2.rectangle(result, (0, 0), (out_w - 1, out_h - 1), (200, 200, 200), 2)
+    return result
+
+
+def _crop_hand(
+    src: np.ndarray,
+    landmarks: dict,
+    hand_key: str,
+    vw: int, vh: int, xo: int,
+    out_w: int, out_h: int,
+) -> np.ndarray:
+    hand = landmarks.get(hand_key)
+    lbl  = "L hand" if hand_key == "left_hand" else "R hand"
+    if hand is None:
+        return _placeholder(out_w, out_h, lbl)
+
+    xs = [lm.x * vw for lm in hand]
+    ys = [lm.y * vh for lm in hand]
+    x_min, x_max = int(min(xs)), int(max(xs))
+    y_min, y_max = int(min(ys)), int(max(ys))
+    pad = max(15, int(max(x_max - x_min, y_max - y_min) * 0.35))
+    x_min = max(0, x_min - pad);  x_max = min(vw, x_max + pad)
+    y_min = max(0, y_min - pad);  y_max = min(vh, y_max + pad)
+
+    if x_max <= x_min or y_max <= y_min:
+        return _placeholder(out_w, out_h, lbl)
+
+    crop_x0 = max(0, xo + x_min);  crop_x1 = min(src.shape[1], xo + x_max)
+    if crop_x1 <= crop_x0:
+        return _placeholder(out_w, out_h, lbl)
+
+    crop = src[y_min:y_max, crop_x0:crop_x1]
+    if crop.size == 0:
+        return _placeholder(out_w, out_h, lbl)
+
+    result = cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+
+    sx = out_w / max(x_max - x_min, 1)
+    sy = out_h / max(y_max - y_min, 1)
+    for lm in hand:
+        px = int((lm.x * vw - x_min) * sx)
+        py = int((lm.y * vh - y_min) * sy)
+        if 0 <= px < out_w and 0 <= py < out_h:
+            cv2.circle(result, (px, py), 3, (0, 200, 255), -1)
+
+    cv2.rectangle(result, (0, 0), (out_w - 1, out_h - 1), (200, 200, 200), 2)
+    return result
+
+
 # -----------------------------------------------------------------------
-def draw_face_inset(
+def draw_bottom_insets(
     frame: np.ndarray,
     landmarks: dict,
     cached_face_lms=None,
@@ -474,92 +552,40 @@ def draw_face_inset(
     video_w: int | None = None,
     video_h: int | None = None,
 ) -> np.ndarray:
-    """
-    Crop the face region and embed it as a picture-in-picture in the
-    top-right corner of the video area of *frame*.
-
-    source_frame: the clean (un-annotated) frame to crop from.  If None,
-                  falls back to *frame* itself (legacy behaviour).
-
-    Bounding box is ALWAYS derived from pose head landmarks (indices 0–10)
-    so the window keeps following the face even when the face landmarker
-    loses tracking.
-
-    Dots are drawn from the current face landmarks when available, or from
-    cached_face_lms when the face landmarker has dropped out temporarily.
-    """
+    """Render face + hand crops at fixed proportions in the bottom strip."""
     h_total, w_total = frame.shape[:2]
-    w  = video_w if video_w is not None else w_total
-    h  = video_h if video_h is not None else h_total   # original video height for landmark coords
-    xo = video_x_offset
+    vw  = video_w  if video_w  is not None else w_total
+    vh  = video_h  if video_h  is not None else h_total
+    xo  = video_x_offset
+    src = source_frame if source_frame is not None else frame
 
-    pose_lms = landmarks.get("pose")
-    face_lms = landmarks.get("face") or cached_face_lms
-
-    if pose_lms is None:
+    bottom_h = h_total - vh
+    if bottom_h <= 4:
         return frame
 
-    # ---- bounding box always from current pose head landmarks -------
-    head = [pose_lms[i] for i in range(11) if pose_lms[i].visibility > 0.3]
-    if not head:
-        return frame
-    xs = [lm.x * w for lm in head]
-    ys = [lm.y * h for lm in head]
-
-    x_min, x_max = int(min(xs)), int(max(xs))
-    y_min, y_max = int(min(ys)), int(max(ys))
-
-    # Add padding: more vertical room (forehead + chin tend to get clipped)
-    pad_x = max(10, int((x_max - x_min) * 0.35))
-    pad_y = max(10, int((y_max - y_min) * 0.60))
-    x_min = max(0, x_min - pad_x)
-    y_min = max(0, y_min - pad_y)
-    x_max = min(w, x_max + pad_x)
-    y_max = min(h, y_max + pad_y)
-
-    if x_max <= x_min or y_max <= y_min:
+    margin  = 8
+    gap     = 12
+    inset_h = bottom_h - 2 * margin
+    if inset_h <= 0:
         return frame
 
-    # ---- crop from the video portion of source frame ----------------
-    src     = source_frame if source_frame is not None else frame
-    src_w   = src.shape[1]
-    crop_x0 = max(0, xo + x_min)
-    crop_x1 = min(src_w, xo + x_max)
-    if crop_x1 <= crop_x0:
-        return frame
-    crop = src[y_min:y_max, crop_x0:crop_x1].copy()
-    ch, cw = crop.shape[:2]
-    if cw <= 0 or ch <= 0:
-        return frame
+    face_w = max(1, int(inset_h * _INSET_FACE_ASPECT))
+    hand_w = max(1, int(inset_h * _INSET_HAND_ASPECT))
+    y_top  = vh + margin
 
-    # ---- scale inset to 1/3 of video width, keep aspect ratio ------
-    inset_w = max(1, w // 3)
-    inset_h = max(1, int(inset_w * ch / cw))
-    inset_h = min(inset_h, h // 2)
-    inset   = cv2.resize(crop, (inset_w, inset_h), interpolation=cv2.INTER_LINEAR)
+    crops = [
+        _crop_face(src, landmarks, cached_face_lms, vw, vh, xo, face_w, inset_h),
+        _crop_hand(src, landmarks, "left_hand",     vw, vh, xo, hand_w, inset_h),
+        _crop_hand(src, landmarks, "right_hand",    vw, vh, xo, hand_w, inset_h),
+    ]
 
-    # ---- draw landmarks AFTER resize so dots stay 1 px -------------
-    # Drawing on the large crop before scaling turns 1-px dots into
-    # sub-pixel artefacts that vanish during interpolation.
-    if face_lms:
-        scale_x = inset_w / (x_max - x_min)
-        scale_y = inset_h / (y_max - y_min)
-        for lm in face_lms:
-            px = int((lm.x * w - x_min) * scale_x)
-            py = int((lm.y * h - y_min) * scale_y)
-            if 0 <= px < inset_w and 0 <= py < inset_h:
-                cv2.circle(inset, (px, py), 1, (0, 230, 0), -1)
+    total_w = sum(c.shape[1] for c in crops) + gap * (len(crops) - 1)
+    x = (w_total - total_w) // 2
 
-    # ---- border -----------------------------------------------------
-    cv2.rectangle(inset, (0, 0), (inset_w - 1, inset_h - 1), (200, 200, 200), 2)
-
-    # ---- place in top-right corner of the video area ----------------
-    margin  = 10
-    x_off   = xo + w - inset_w - margin
-    y_off   = margin
-    frame_w = frame.shape[1]
-
-    if x_off >= 0 and x_off + inset_w <= frame_w and y_off + inset_h <= h:
-        frame[y_off: y_off + inset_h, x_off: x_off + inset_w] = inset
+    for crop in crops:
+        ch, cw = crop.shape[:2]
+        if x >= 0 and x + cw <= w_total and y_top + ch <= h_total:
+            frame[y_top:y_top + ch, x:x + cw] = crop
+        x += cw + gap
 
     return frame

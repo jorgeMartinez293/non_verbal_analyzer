@@ -264,10 +264,10 @@ class VideoProcessor:
                                        gesture_states=self.gesture_manager.get_states(),
                                        tracking_stable=tracking_stable,
                                        sidebar_frame=wide_frame)
-                    debug_overlay.draw_face_inset(
+                    debug_overlay.draw_bottom_insets(
                         wide_frame, landmarks,
                         cached_face_lms=self._last_face_lms,
-                        source_frame=clean_frame,  # full clean frame; xo used internally for crop
+                        source_frame=clean_frame,
                         video_x_offset=sidebar_w,
                         video_w=width,
                         video_h=height,
