@@ -11,7 +11,7 @@ El sistema reconoce los siguientes gestos:
 | **Brazos cruzados** | Las muñecas se cruzan horizontalmente por delante del torso |
 | **Brazos abiertos** | Los brazos se extienden a los lados más allá del ancho de hombros |
 | **Brazos levantados** | Uno o ambos brazos suben por encima del nivel de los hombros |
-| **Cejas levantadas** | Elevación de cejas respecto a la línea base calibrada al inicio del vídeo |
+| **Cejas levantadas** | Elevación de cejas por encima de la línea base personal, calibrada automáticamente al inicio del vídeo |
 | **Tocar la cara** | Una mano se aproxima a la región facial |
 | **Frecuencia de parpadeo** | Tasa de parpadeos por minuto mediante el Eye Aspect Ratio (EAR) |
 
@@ -50,6 +50,17 @@ Para evitar falsos positivos por fotogramas ruidosos, ningún gesto se confirma 
 
 Antes de enviar los landmarks a los detectores, el procesador comprueba que la estimación de pose sea estable: la velocidad de desplazamiento de hombros y caderas debe permanecer por debajo de un umbral durante al menos 5 fotogramas consecutivos. Mientras el tracking sea inestable (por ejemplo, en los primeros fotogramas o tras oclusiones), las ventanas de confirmación se resetean para evitar acumulaciones espurias.
 
+### Calibración por individuo
+
+La distancia en reposo entre cejas y ojos varía de una persona a otra, por lo que un umbral fijo produciría muchos falsos positivos o negativos según el sujeto. Para el gesto de cejas levantadas el sistema dedica los primeros fotogramas del vídeo a construir una línea base personal:
+
+1. **Recogida de muestras** — durante los primeros fotogramas con cara detectada y tracking estable, se mide el ratio ceja-ojo normalizado por la distancia inter-iris.
+2. **Filtrado de ruido** — solo se aceptan muestras tras una racha de `calib_stability_window` fotogramas válidos consecutivos y dentro de límites de plausibilidad geométrica, descartando detecciones espurias.
+3. **Cálculo del umbral personal** — al acumular suficientes muestras (`calibration_min_samples`, por defecto 200 fotogramas), se toma el percentil 10 de los valores recogidos como línea base. Usar un percentil bajo en lugar de la media evita que los momentos en que el sujeto levantó las cejas durante la calibración inflen el valor de referencia.
+4. **Umbral efectivo** — `threshold = baseline + eyebrow_raise_delta`. El delta (configurable) es el margen de elevación que debe superar el gesto respecto al reposo personal.
+
+Mientras dura la calibración el detector no dispara. Una vez completada, el umbral se adapta a la anatomía del sujeto para el resto del vídeo.
+
 ### Inferencia facial mejorada
 
 El modelo de face landmarker tiene dificultades con caras pequeñas (sujeto lejos de la cámara). El sistema resuelve esto usando los landmarks de pose para localizar la cabeza, recortando esa región y pasando solo el recorte ampliado al modelo facial. Los resultados se reescalan al sistema de coordenadas del fotograma original.
@@ -83,8 +94,7 @@ python main.py ruta/al/video.mp4 --debug
 
 El resultado es un único vídeo en `output/nombre_video_annotated.mp4`. Incluye una barra lateral con gráficas temporales de las métricas clave, insets de la zona facial y barras de progreso de confirmación por gesto. Es el modo recomendado para ajustar umbrales.
 
-<!-- Captura del modo debug mostrando la barra lateral con métricas y los landmarks superpuestos -->
-![Debug overlay](docs/debug_overlay.png)
+![Debug overlay](debug_overlay.png)
 
 ### Opciones de línea de comandos
 
