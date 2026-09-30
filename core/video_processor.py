@@ -117,7 +117,8 @@ class VideoProcessor:
         self._pose_lm = mp_vision.PoseLandmarker.create_from_options(
             mp_vision.PoseLandmarkerOptions(
                 base_options = BaseOptions(
-                    model_asset_path=str(self._models_dir / "pose_landmarker_heavy.task")
+                    model_asset_path=str(self._models_dir / "pose_landmarker_heavy.task"),
+                    delegate=BaseOptions.Delegate.CPU,
                 ),
                 running_mode                  = RunningMode.VIDEO,
                 num_poses                     = 1,
@@ -130,7 +131,8 @@ class VideoProcessor:
         self._face_lm = mp_vision.FaceLandmarker.create_from_options(
             mp_vision.FaceLandmarkerOptions(
                 base_options = BaseOptions(
-                    model_asset_path=str(self._models_dir / "face_landmarker.task")
+                    model_asset_path=str(self._models_dir / "face_landmarker.task"),
+                    delegate=BaseOptions.Delegate.CPU,
                 ),
                 running_mode                   = RunningMode.VIDEO,
                 num_faces                      = 1,
@@ -144,7 +146,8 @@ class VideoProcessor:
         self._hand_lm = mp_vision.HandLandmarker.create_from_options(
             mp_vision.HandLandmarkerOptions(
                 base_options = BaseOptions(
-                    model_asset_path=str(self._models_dir / "hand_landmarker.task")
+                    model_asset_path=str(self._models_dir / "hand_landmarker.task"),
+                    delegate=BaseOptions.Delegate.CPU,
                 ),
                 running_mode                  = RunningMode.VIDEO,
                 num_hands                     = 2,
@@ -182,7 +185,7 @@ class VideoProcessor:
             bottom_margin = int(sidebar_w * height / width) if width > 0 else 0
             writer        = cv2.VideoWriter(
                 str(out_path),
-                cv2.VideoWriter_fourcc(*"mp4v"),
+                cv2.VideoWriter_fourcc(*"avc1"),
                 fps, (width + sidebar_w, height + bottom_margin),
             )
             print(f"[VideoProcessor] Output : {out_path}\n")

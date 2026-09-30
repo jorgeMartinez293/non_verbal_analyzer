@@ -23,14 +23,13 @@ from collections import deque
 
 # ---- Rolling history for temporal graphs --------------------------------
 _HISTORY_LEN = 200
-_GRAPH_W     = 130   # width of graph plot area
+_GRAPH_W     = 345   # width of graph plot area
 _GRAPH_H     = 35    # height of graph plot area
 _GRAPH_GAP   = 4     # vertical gap between graphs
 _LABEL_H     = 12    # height of label row above each graph
 _VAL_W       = 75    # extra width to the right for current-value text
-_COL_GAP     = 10   # horizontal gap between the two graph columns
-_COL_W       = _GRAPH_W + _VAL_W          # 205 — width of one graph column
-SIDEBAR_W    = _COL_W * 2 + _COL_GAP      # 420 — total sidebar width (public)
+_COL_W       = _GRAPH_W + _VAL_W          # 420 — width of the single graph column
+SIDEBAR_W    = _COL_W                     # 420 — total sidebar width (public)
 _history: dict[str, deque] = {}
 _scale:   dict[str, float] = {}   # hi per metric — fixed at thr*1.3; expands up for refs
 
@@ -239,20 +238,14 @@ def _update_and_draw_graphs(
     cv2.rectangle(frame, (0, 0), (SIDEBAR_W - 1, h_frame), (18, 18, 18), -1)
     cv2.line(frame, (SIDEBAR_W - 1, 0), (SIDEBAR_W - 1, h_frame), (60, 60, 60), 1)
 
-    # ---- 2-column graph layout ---------------------------------------
-    col_xs = [0, _COL_W + _COL_GAP]   # x-start for each column
-    col_ys = [0, 0]                    # current y for each column
-    half   = (len(specs) + 1) // 2    # first column gets ceil(n/2)
-
-    for i, (key, _val, thr, is_ref, is_calib, label) in enumerate(specs):
-        col = 0 if i < half else 1
-        x0  = col_xs[col]
-        y0  = col_ys[col]
+    # ---- single-column graph layout ----------------------------------
+    y0 = 0
+    for key, _val, thr, is_ref, is_calib, label in specs:
         if y0 + _LABEL_H + _GRAPH_H > h_frame:
-            continue
+            break
         buf = _history.get(key, deque())
-        _draw_one_graph(frame, x0, y0, label, buf, thr, is_ref, is_calib)
-        col_ys[col] += _LABEL_H + _GRAPH_H + _GRAPH_GAP
+        _draw_one_graph(frame, 0, y0, label, buf, thr, is_ref, is_calib)
+        y0 += _LABEL_H + _GRAPH_H + _GRAPH_GAP
 
     # ---- horizontal confirmation bars below the graphs ----------------
     if not gesture_states:
@@ -265,7 +258,7 @@ def _update_and_draw_graphs(
         return
     bar_gap   = 4
     bar_h     = 40
-    bar_y     = min(max(col_ys) + bar_gap, h_frame - bar_h - 2)
+    bar_y     = min(y0 + bar_gap, h_frame - bar_h - 2)
     if bar_y < 0:
         return
     available_w = SIDEBAR_W - 2 * bar_gap
@@ -432,7 +425,7 @@ def draw_gesture_state(
 
 
 # ── fixed proportions for the bottom-strip insets ────────────────────────
-_INSET_FACE_ASPECT = 0.80   # face crop  width / height
+_INSET_FACE_ASPECT = 1.00   # face crop  width / height (square)
 _INSET_HAND_ASPECT = 0.75   # hand crop  width / height
 
 
@@ -468,8 +461,14 @@ def _crop_face(
     y_min, y_max = int(min(ys)), int(max(ys))
     pad_x = max(10, int((x_max - x_min) * 0.35))
     pad_y = max(10, int((y_max - y_min) * 0.60))
-    x_min = max(0, x_min - pad_x);  x_max = min(vw, x_max + pad_x)
-    y_min = max(0, y_min - pad_y);  y_max = min(vh, y_max + pad_y)
+    x_min -= pad_x;  x_max += pad_x
+    y_min -= pad_y;  y_max += pad_y
+
+    # force a square box centred on the head, shifted (not cut) to stay in frame
+    side = min(max(x_max - x_min, y_max - y_min), vw, vh)
+    cx, cy = (x_min + x_max) // 2, (y_min + y_max) // 2
+    x_min = max(0, min(vw - side, cx - side // 2));  x_max = x_min + side
+    y_min = max(0, min(vh - side, cy - side // 2));  y_max = y_min + side
 
     if x_max <= x_min or y_max <= y_min:
         return _placeholder(out_w, out_h, "face")
