@@ -117,7 +117,7 @@ class ClipSaver:
         filename = f"{clip.gesture_name}_frame{clip.trigger_frame_idx:06d}.mp4"
         out_path = dest_dir / filename
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        fourcc = cv2.VideoWriter_fourcc(*"avc1")
         writer = cv2.VideoWriter(
             str(out_path), fourcc, clip.fps, (clip.width, clip.height)
         )

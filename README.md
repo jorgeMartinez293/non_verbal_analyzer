@@ -72,7 +72,7 @@ El modelo de face landmarker tiene dificultades con caras pequeñas (sujeto lejo
 Analiza el vídeo y guarda un clip corto (fotogramas antes y después del trigger) por cada gesto detectado:
 
 ```bash
-python main.py ruta/al/video.mp4
+uv run main.py ruta/al/video.mp4
 ```
 
 Los clips se guardan en:
@@ -89,7 +89,7 @@ output/
 Genera un vídeo anotado con landmarks, métricas en tiempo real y el estado de confirmación de cada gesto:
 
 ```bash
-python main.py ruta/al/video.mp4 --debug
+uv run main.py ruta/al/video.mp4 --debug
 ```
 
 El resultado es un único vídeo en `output/nombre_video_annotated.mp4`. Incluye una barra lateral con gráficas temporales de las métricas clave, insets de la zona facial y barras de progreso de confirmación por gesto. Es el modo recomendado para ajustar umbrales.
@@ -99,7 +99,7 @@ El resultado es un único vídeo en `output/nombre_video_annotated.mp4`. Incluye
 ### Opciones de línea de comandos
 
 ```
-python main.py <video_path> [--output-dir OUTPUT] [--config CONFIG] [--debug]
+uv run main.py <video_path> [--output-dir OUTPUT] [--config CONFIG] [--debug]
 
 Argumentos:
   video_path          Ruta al archivo .mp4 de entrada
@@ -110,28 +110,29 @@ Argumentos:
 
 ## Instalación
 
-**Requisitos:** Python 3.10+, conda (recomendado)
+**Requisitos:** Python 3.12+, [uv](https://docs.astral.sh/uv/)
 
 ```bash
 # Clonar el repositorio
 git clone <url-del-repo>
-cd video_analyzer
+cd non_verbal_analyzer
 
-# Crear entorno y activar
-conda create -n video_analyzer python=3.10
-conda activate video_analyzer
+# Instalar dependencias (crea .venv)
+uv sync
 
-# Instalar dependencias
-pip install mediapipe opencv-python numpy
+# Descargar los modelos de MediaPipe en models/
+uv run download_models.py
 ```
 
-Los modelos de MediaPipe deben descargarse y colocarse en la carpeta `models/`:
+El script `download_models.py` descarga los modelos `.task` (no incluidos en el repo por tamaño):
 
 | Archivo | Modelo |
 |---|---|
 | `pose_landmarker_heavy.task` | [Pose Landmarker Heavy](https://developers.google.com/mediapipe/solutions/vision/pose_landmarker) |
 | `face_landmarker.task` | [Face Landmarker](https://developers.google.com/mediapipe/solutions/vision/face_landmarker) |
 | `hand_landmarker.task` | [Hand Landmarker](https://developers.google.com/mediapipe/solutions/vision/hand_landmarker) |
+
+Usa `--force` para volver a descargarlos.
 
 ## Configuración de umbrales
 
@@ -178,8 +179,10 @@ El `GestureManager` lo descubrirá e inyectará automáticamente en el siguiente
 ## Estructura del proyecto
 
 ```
-video_analyzer/
+non_verbal_analyzer/
 ├── main.py                  # Punto de entrada y CLI
+├── download_models.py       # Descarga los modelos .task de MediaPipe
+├── pyproject.toml           # Dependencias (uv)
 ├── config/
 │   └── thresholds.json      # Umbrales de todos los gestos
 ├── core/
@@ -189,6 +192,8 @@ video_analyzer/
 │   └── debug_overlay.py     # Anotaciones y barra lateral en modo debug
 ├── gestures/
 │   ├── base_gesture.py      # Clase base con ventana deslizante y cooldown
+│   ├── calibrating_gesture.py # Base para gestos con calibración inicial
+│   ├── utils.py             # Utilidades geométricas compartidas
 │   ├── crossed_arms.py
 │   ├── open_arms.py
 │   ├── raised_arms.py

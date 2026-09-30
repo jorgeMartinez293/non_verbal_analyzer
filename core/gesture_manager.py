@@ -45,6 +45,7 @@ class GestureManager:
                     issubclass(obj, BaseGesture)
                     and obj is not BaseGesture
                     and obj.__module__ == module.__name__
+                    and not inspect.isabstract(obj)
                 ):
                     thresholds = self.config.get(gesture_file.stem, {})
                     instance   = obj(thresholds)
@@ -61,6 +62,15 @@ class GestureManager:
     def get_states(self) -> dict[str, dict]:
         """Return the current internal state of every loaded gesture."""
         return {g.name: g.state for g in self.gestures}
+
+    def reset_windows(self) -> None:
+        """Clear the sliding-window confirmation state of every gesture.
+
+        Called when tracking is deemed unstable so that noisy landmark
+        positions do not accumulate toward a false positive.
+        """
+        for gesture in self.gestures:
+            gesture._window.clear()
 
     def process_frame(self, landmarks: dict) -> list[str]:
         """

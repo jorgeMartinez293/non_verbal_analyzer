@@ -83,3 +83,11 @@ class BaseGesture(ABC):
             return True
 
         return False
+
+    # ------------------------------------------------------------------
+    def set_fps(self, fps: float) -> None:
+        """Called by the pipeline with the actual video FPS.
+
+        Override in subclasses that need frame-rate information (e.g.
+        blink_frequency for BPM conversion).  Default is a no-op.
+        """
